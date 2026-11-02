@@ -1,0 +1,19 @@
+[package]
+name = "aegis_vault"
+version = "0.1.0"
+edition = "2021"
+description = "AEGIS vault: verifiable execution log for private AI and cross-chain intents"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "5.6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# `unit-testing` is not a default feature of near-sdk 5.6. Enable it only for
+# `cargo test` so the wasm contract build stays free of the mock VM.
+[dev-dependencies]
+near-sdk = { version = "5.6.0", features = ["unit-testing"] }
