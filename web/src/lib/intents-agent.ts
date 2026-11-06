@@ -25,8 +25,8 @@ import {
 import fs from "fs";
 import { aegisStatePath, writeJsonFile } from "./aegis-paths";
 
-export const AGENT_ID = "agent-aegis-prime.near";
-export const OWNER_ACCOUNT = "owner.aegis.testnet";
+export const AGENT_ID = "agent-kotha-prime.near";
+export const OWNER_ACCOUNT = "owner.kotha.testnet";
 export const PUBLIC_SHARD = "intents.near";
 export const CONFIDENTIAL_SHARD = "intents.far";
 
