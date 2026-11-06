@@ -37,7 +37,7 @@ export function TelemetryBar({
   frozen: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const contractId = vault?.contractId || process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID || "aegis-vault.testnet";
+  const contractId = vault?.contractId || process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID || "aegis-vault-v1.testnet";
 
   return (
     <header className="flex flex-col gap-3">
