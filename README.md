@@ -1,12 +1,12 @@
-# Kotha (কথা) — Speak. Verify. Execute.
+# Kotha — Speak. Verify. Execute.
 
 Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR.
 
-**Prohori (প্রহরী)** is the policy and spend firewall. **Kotha (কথা)** is the private TEE voice and chat enclave. **Shakkhi (সাক্ষী)** is the dry-run and on-chain audit vault.
+**Prohori Firewall** is the left column. **Kotha Voice Enclave** is the center column. **Shakkhi On-Chain Vault** is the right column.
 
 ## The Real-World Story
 
-A Bangladeshi migrant worker opens Kotha and says `"আমার ২ NEAR দিয়ে USDT কিনে দাও"`. Kotha understands the Bangla, drafts a swap of 2 wNEAR (`nep141:wrap.near`) to USDT (`nep141:usdt.tether-token.near`), and shows a bilingual explanation. **Prohori (প্রহরী)** enforces the spending rules inside the Rust contract, not only in the browser: $100.00 per day (`10_000` cents) and $50.00 per transaction (`5_000` cents). **Shakkhi (সাক্ষী)** stores the hardware-attested receipt on NEAR Testnet so anyone can re-check the hashes and the ECDSA signature.
+A Bangladeshi migrant worker opens Kotha and says `"আমার ২ NEAR দিয়ে USDT কিনে দাও"`. Kotha Voice Enclave understands the Bangla, drafts a swap of 2 wNEAR (`nep141:wrap.near`) to USDT (`nep141:usdt.tether-token.near`), and shows a bilingual explanation. **Prohori Firewall** enforces the spending rules inside the Rust contract, not only in the browser: $100.00 per day (`10_000` cents) and $50.00 per transaction (`5_000` cents). **Shakkhi On-Chain Vault** stores the hardware-attested receipt on NEAR Testnet so anyone can re-check the hashes and the ECDSA signature.
 
 Built for millions of Bangladeshi migrant workers and global users who can speak naturally in Bangla to send remittances or swap tokens across chains—while hardware TEEs protect their privacy and on-chain Rust rules ensure AI can never exceed their spending limits.
 
@@ -50,9 +50,9 @@ The center column animates a voice waveform for `bn-BD` / `en-US` Web Speech and
 
 | Column | Engine | Where |
 | --- | --- | --- |
-| Left | Prohori (প্রহরী) — Policy & Spend Firewall | `web/src/components/aegis/policy-panel.tsx`, limits mirrored in `contract/src/lib.rs` |
-| Center | Kotha (কথা) — Private TEE Voice & Chat Enclave | `web/src/components/aegis/copilot-panel.tsx`, `web/src/lib/near-ai-tee.ts` |
-| Right | Shakkhi (সাক্ষী) — Dry-Run & On-Chain Audit Vault | `web/src/components/aegis/audit-panel.tsx`, `web/src/lib/near-vault-rpc.ts` |
+| Left | Prohori Firewall | `web/src/components/aegis/policy-panel.tsx`, limits mirrored in `contract/src/lib.rs` |
+| Center | Kotha Voice Enclave | `web/src/components/aegis/copilot-panel.tsx`, `web/src/lib/near-ai-tee.ts` |
+| Right | Shakkhi On-Chain Vault | `web/src/components/aegis/audit-panel.tsx`, `web/src/lib/near-vault-rpc.ts` |
 
 `VerifiedExecution` carries `usd_amount_cents` (`1500` = $15.00) plus `correlation_id`, `agent_id`, `action_type`, `origin_asset`, `destination_asset`, `amount_atomic`, `near_ai_chat_id`, `tee_signing_address`, `request_sha256`, `response_sha256`, `tee_signature`, and `timestamp_ns`.
 

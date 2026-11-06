@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Kotha (কথা) — Speak. Verify. Execute.",
+  title: "Kotha — Speak. Verify. Execute.",
   description:
-    "Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Prohori enforces on-chain spending limits, Kotha speaks inside a private TEE, and Shakkhi records the proof.",
+    "Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Prohori Firewall enforces on-chain spending limits, Kotha Voice Enclave speaks inside a private TEE, and Shakkhi On-Chain Vault records the proof.",
 };
 
 export default function RootLayout({

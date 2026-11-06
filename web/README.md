@@ -1,6 +1,6 @@
 # Kotha web
 
-Bangla-first command deck for **Kotha (কথা) — Speak. Verify. Execute.**
+Bangla-first command deck for **Kotha — Speak. Verify. Execute.**
 
 The judge-facing writeup, contract id, and verification commands live in the repository root [README](../README.md).
 

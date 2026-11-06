@@ -291,7 +291,7 @@ function AssistantBubble({ lang, message, baseUrl }: { lang: Lang; message: Chat
   const combined = `${attestation.requestSha256}:${attestation.responseSha256}`;
   return (
     <article className="mr-6 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
-      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA · কথা</div>
+      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA</div>
       <div className="mb-2 flex flex-wrap gap-2">
         <Badge className={riskTone(decision.risk_score)}>
           {translate(lang, "risk")} {decision.risk_score}

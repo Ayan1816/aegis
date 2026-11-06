@@ -1,13 +1,18 @@
+//! Kotha — Speak. Verify. Execute.
+//!
+//! Prohori Firewall enforces spending limits. Kotha Voice Enclave attests each
+//! action. Shakkhi On-Chain Vault stores the receipt.
+
 use near_sdk::store::IterableMap;
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
-/// Actions Kotha may attest and commit to the Shakkhi vault.
+/// Actions Kotha Voice Enclave may attest and commit to Shakkhi On-Chain Vault.
 const ACTION_TYPES: [&str; 5] = ["swap", "transfer", "withdraw", "shield", "unshield"];
 
 /// Nanoseconds in one UTC day. `env::block_timestamp()` is nanoseconds.
 const DAY_NS: u64 = 86_400_000_000_000;
 
-/// Default Prohori policy: $100.00 per day and $50.00 per transaction.
+/// Default Prohori Firewall policy: $100.00 per day and $50.00 per transaction.
 const DEFAULT_DAILY_LIMIT_USD_CENTS: u64 = 10_000;
 const DEFAULT_PER_TX_LIMIT_USD_CENTS: u64 = 5_000;
 
@@ -32,7 +37,7 @@ pub struct VerifiedExecution {
     pub timestamp_ns: u64,
 }
 
-/// On-chain audit vault. Prohori spending rules are enforced here, not only in the UI.
+/// Shakkhi On-Chain Vault. Prohori Firewall rules are enforced here, not only in the UI.
 #[derive(PanicOnDefault)]
 #[near(contract_state)]
 pub struct Contract {

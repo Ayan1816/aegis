@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 
 /**
- * Preferred location from the AEGIS local-dev contract.
+ * Preferred location from the Kotha local-dev contract.
  * Some runtimes mount `/tmp` without write permission for the app user.
  * In that case the same filenames are stored under `os.tmpdir()/aegis`.
  */

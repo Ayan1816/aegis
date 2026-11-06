@@ -42,7 +42,7 @@ const PUBLIC_FAIL_COOLDOWN_MS = 30_000;
 export const INTENT_ACTIONS = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
 export type IntentAction = (typeof INTENT_ACTIONS)[number];
 
-export const AEGIS_ASSETS = [
+export const KOTHA_ASSETS = [
   { asset_id: "nep141:wrap.near", symbol: "wNEAR", decimals: 24, blockchain: "near", price: 3.42 },
   { asset_id: "nep141:usdt.tether-token.near", symbol: "USDT", decimals: 6, blockchain: "near", price: 1 },
   { asset_id: "nep141:usdc.near", symbol: "USDC", decimals: 6, blockchain: "near", price: 0.9998 },
@@ -366,7 +366,7 @@ function createDefaultState(): PersistedState {
         "nep141:usdc.near": humanToAtomic("30", 6).toString(),
       },
     },
-    prices: Object.fromEntries(AEGIS_ASSETS.map((asset) => [asset.asset_id, asset.price])),
+    prices: Object.fromEntries(KOTHA_ASSETS.map((asset) => [asset.asset_id, asset.price])),
   };
 }
 
@@ -376,7 +376,7 @@ export function defaultPolicy(): ActivePolicy {
     spentTodayUsd: 15,
     perTxCapUsd: 50,
     allowedActions: [...INTENT_ACTIONS],
-    allowedAssets: AEGIS_ASSETS.map((asset) => asset.asset_id),
+    allowedAssets: KOTHA_ASSETS.map((asset) => asset.asset_id),
     confidentialShardEnabled: true,
     frozen: false,
   };
@@ -396,7 +396,7 @@ export function canonicalAsset(value: string): string {
 
 export function assetMeta(assetId: string): AssetMeta {
   const canonical = canonicalAsset(assetId);
-  const known = AEGIS_ASSETS.find((asset) => asset.asset_id === canonical);
+  const known = KOTHA_ASSETS.find((asset) => asset.asset_id === canonical);
   if (known) return { ...known };
   return {
     asset_id: canonical || assetId,
@@ -1288,7 +1288,7 @@ function fallbackCatalog(): { network: NetworkSnapshot; tokens: TokenMetadata[];
 }
 
 function fallbackTokens(now: string | null): TokenMetadata[] {
-  return AEGIS_ASSETS.map((asset) => ({
+  return KOTHA_ASSETS.map((asset) => ({
     asset_id: asset.asset_id,
     symbol: asset.symbol,
     decimals: asset.decimals,
@@ -1369,7 +1369,7 @@ function toView(state: PersistedState, source: "local-ledger" | "remote"): Agent
 }
 
 function balanceRows(state: PersistedState, shard: "public" | "confidential"): TokenBalanceView[] {
-  const ids = new Set([...Object.keys(state.balances[shard]), ...AEGIS_ASSETS.map((asset) => asset.asset_id)]);
+  const ids = new Set([...Object.keys(state.balances[shard]), ...KOTHA_ASSETS.map((asset) => asset.asset_id)]);
   return [...ids].map((assetId) => {
     const meta = assetMeta(assetId);
     const raw = BigInt(state.balances[shard][assetId] ?? "0");
@@ -1416,7 +1416,7 @@ function defaultBook(): BalanceBook {
 }
 
 function defaultPrices(): Record<string, number> {
-  return Object.fromEntries(AEGIS_ASSETS.map((asset) => [asset.asset_id, asset.price]));
+  return Object.fromEntries(KOTHA_ASSETS.map((asset) => [asset.asset_id, asset.price]));
 }
 
 function bigintMap(source: Record<string, string>): Record<string, bigint> {
