@@ -42,6 +42,7 @@ export function AuditPanel({
 }) {
   return (
     <div className="flex flex-col gap-3">
+      <h2 className="px-1 text-sm font-semibold leading-snug text-white">{translate(lang, "auditTitle")}</h2>
       <SpotlightGlassCard alert={frozen || dryRun?.allowed === false}>
         <div className="space-y-3 p-4">
           <div>
@@ -182,7 +183,7 @@ function AuditStream({
   return (
     <SpotlightGlassCard alert={frozen}>
       <div className="space-y-3 p-4">
-        <h2 className="text-sm font-semibold text-white">{translate(lang, "auditTitle")}</h2>
+        <h2 className="text-sm font-semibold leading-snug text-white">{translate(lang, "auditTitle")}</h2>
         <div className="flex flex-wrap gap-1">
           {tabs.map((tab) => (
             <button

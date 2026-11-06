@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AEGIS // Verifiable Confidential DeFi & Cross-Chain Intent Copilot on NEAR",
+  title: "Kotha (কথা) — Speak. Verify. Execute.",
   description:
-    "Verifiable confidential DeFi and cross-chain intent copilot on NEAR. Private NEAR AI Cloud TEE, owner policy firewall, and an on-chain audit vault.",
+    "Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Prohori enforces on-chain spending limits, Kotha speaks inside a private TEE, and Shakkhi records the proof.",
 };
 
 export default function RootLayout({

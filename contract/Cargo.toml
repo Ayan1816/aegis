@@ -2,7 +2,7 @@
 name = "aegis_vault"
 version = "0.1.0"
 edition = "2021"
-description = "AEGIS vault: verifiable execution log for private AI and cross-chain intents"
+description = "Kotha vault: on-chain Prohori spending limits and Shakkhi audit log for private voice DeFi"
 license = "MIT OR Apache-2.0"
 
 [lib]

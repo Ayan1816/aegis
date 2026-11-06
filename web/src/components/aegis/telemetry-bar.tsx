@@ -45,8 +45,9 @@ export function TelemetryBar({
         <div className="flex items-center gap-3">
           <Crest frozen={frozen} />
           <div>
-            <div className="font-mono text-[11px] uppercase tracking-[0.42em] text-[#00EC97]">AEGIS</div>
-            <h1 className="max-w-xl text-sm font-medium text-white/90 sm:text-base">{translate(lang, "subtitle")}</h1>
+            <div className="font-mono text-[11px] uppercase tracking-[0.42em] text-[#00EC97]">KOTHA · কথা</div>
+            <h1 className="max-w-xl text-sm font-medium text-white/90 sm:text-base">{translate(lang, "brand")}</h1>
+            <p className="mt-1 max-w-xl text-[12px] leading-snug text-white/70">{translate(lang, "subtitle")}</p>
             <p className="mt-1 font-mono text-[10px] text-white/40">
               {translate(lang, "agent")} {vault?.agentAccount || "agent-aegis-prime.near"} · {translate(lang, "owner")}{" "}
               {vault?.owner || "owner.aegis.testnet"}

@@ -6,7 +6,7 @@ import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel
 import { translate, type Intensity, type Lang } from "@/components/aegis/copy";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
 import { TelemetryBar } from "@/components/aegis/telemetry-bar";
-import { AuroraEnclaveBackground, ShimmerActionButton } from "@/components/ui/aegis-primitives";
+import { AuroraEnclaveBackground, KothaStoryBanner, ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import type {
   AegisIntent,
   AttestedInference,
@@ -229,6 +229,7 @@ export function CommandDeck() {
           balances={dashboard?.agentState.balances ?? null}
           frozen={frozen}
         />
+        <KothaStoryBanner brand={translate(lang, "brand")} story={translate(lang, "story")} />
         {frozen ? (
           <div className="rounded-xl border border-[#FF3B5C]/50 bg-[#FF3B5C]/15 px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.22em] text-[#ffd0d8]">
             {translate(lang, "lockdown")}

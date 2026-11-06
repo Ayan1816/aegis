@@ -93,6 +93,7 @@ function toVaultRecord(execution: {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   near_ai_chat_id: string;
   tee_signing_address: string;
   request_sha256: string;
@@ -107,6 +108,7 @@ function toVaultRecord(execution: {
     origin_asset: execution.origin_asset,
     destination_asset: execution.destination_asset,
     amount_atomic: execution.amount_atomic,
+    usd_amount_cents: execution.usd_amount_cents,
     near_ai_chat_id: execution.near_ai_chat_id,
     tee_signing_address: execution.tee_signing_address,
     request_sha256: execution.request_sha256,

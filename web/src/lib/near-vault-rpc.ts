@@ -15,6 +15,7 @@ export type VerifiedExecution = {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   near_ai_chat_id: string;
   tee_signing_address: string;
   request_sha256: string;
@@ -182,6 +183,7 @@ function seedLog(): LogFile {
     origin_asset: "nep141:wrap.near",
     destination_asset: "nep141:usdt.tether-token.near",
     amount_atomic: "1500000000000000000000000",
+    usd_amount_cents: "513",
     chat_id: "chatcmpl-aegis-8c21aa01e4b64790",
     request: { action: "swap", amount: "1.5", origin: "wNEAR", destination: "USDT" },
     response: { policy_status: "PASS", explanation: "Swapped 1.5 wNEAR to USDT inside the daily budget." },
@@ -193,6 +195,7 @@ function seedLog(): LogFile {
     origin_asset: "nep141:usdt.tether-token.near",
     destination_asset: "nep141:usdt.tether-token.near",
     amount_atomic: "25000000",
+    usd_amount_cents: "2500",
     chat_id: "chatcmpl-aegis-19de4402ab1844c1",
     request: { action: "shield", amount: "25", asset: "USDT", shard: "intents.far" },
     response: { policy_status: "PASS", explanation: "Shielded 25 USDT into intents.far." },
@@ -207,6 +210,7 @@ function seedExecution(input: {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   chat_id: string;
   request: unknown;
   response: unknown;
@@ -225,6 +229,7 @@ function seedExecution(input: {
     origin_asset: input.origin_asset,
     destination_asset: input.destination_asset,
     amount_atomic: input.amount_atomic,
+    usd_amount_cents: input.usd_amount_cents,
     near_ai_chat_id: input.chat_id,
     tee_signing_address: key.signingAddress,
     request_sha256,
@@ -242,6 +247,7 @@ function validateExecution(record: VerifiedExecution): VerifiedExecution {
     "origin_asset",
     "destination_asset",
     "amount_atomic",
+    "usd_amount_cents",
     "near_ai_chat_id",
     "tee_signing_address",
     "request_sha256",
@@ -257,8 +263,8 @@ function validateExecution(record: VerifiedExecution): VerifiedExecution {
   if (!(ACTION_TYPES as readonly string[]).includes(record.action_type)) {
     throw new Error(`Invalid action_type: ${record.action_type}`);
   }
-  if (!/^\d+$/.test(record.timestamp_ns) || !/^\d+$/.test(record.amount_atomic)) {
-    throw new Error("amount_atomic and timestamp_ns must be unsigned integers.");
+  if (!/^\d+$/.test(record.timestamp_ns) || !/^\d+$/.test(record.amount_atomic) || !/^\d+$/.test(record.usd_amount_cents)) {
+    throw new Error("amount_atomic, usd_amount_cents, and timestamp_ns must be unsigned integers.");
   }
   if (!/^[0-9a-fA-F]{64}$/.test(record.request_sha256) || !/^[0-9a-fA-F]{64}$/.test(record.response_sha256)) {
     throw new Error("request_sha256 and response_sha256 must be 32-byte hex digests.");
@@ -270,6 +276,7 @@ function validateExecution(record: VerifiedExecution): VerifiedExecution {
     origin_asset: record.origin_asset.trim(),
     destination_asset: record.destination_asset.trim(),
     amount_atomic: record.amount_atomic.trim(),
+    usd_amount_cents: record.usd_amount_cents.trim(),
     near_ai_chat_id: record.near_ai_chat_id.trim(),
     tee_signing_address: record.tee_signing_address.trim(),
     request_sha256: record.request_sha256.trim().toLowerCase(),
@@ -281,7 +288,11 @@ function validateExecution(record: VerifiedExecution): VerifiedExecution {
 
 function normalizeExecution(value: unknown): VerifiedExecution | null {
   if (!value || typeof value !== "object") return null;
-  const record = value as Partial<VerifiedExecution> & { timestamp_ns?: string | number; amount_atomic?: string | number };
+  const record = value as Partial<VerifiedExecution> & {
+    timestamp_ns?: string | number;
+    amount_atomic?: string | number;
+    usd_amount_cents?: string | number;
+  };
   try {
     return validateExecution({
       correlation_id: String(record.correlation_id ?? ""),
@@ -290,6 +301,7 @@ function normalizeExecution(value: unknown): VerifiedExecution | null {
       origin_asset: String(record.origin_asset ?? ""),
       destination_asset: String(record.destination_asset ?? ""),
       amount_atomic: String(record.amount_atomic ?? ""),
+      usd_amount_cents: String(record.usd_amount_cents ?? "0"),
       near_ai_chat_id: String(record.near_ai_chat_id ?? ""),
       tee_signing_address: String(record.tee_signing_address ?? ""),
       request_sha256: String(record.request_sha256 ?? ""),
@@ -318,8 +330,11 @@ function executionJson(record: VerifiedExecution): string {
   const payload = {
     ...record,
     timestamp_ns: `__TS_${record.timestamp_ns}__`,
+    usd_amount_cents: `__USD_${record.usd_amount_cents}__`,
   };
-  return JSON.stringify(payload).replace(`"__TS_${record.timestamp_ns}__"`, record.timestamp_ns);
+  return JSON.stringify(payload)
+    .replace(`"__TS_${record.timestamp_ns}__"`, record.timestamp_ns)
+    .replace(`"__USD_${record.usd_amount_cents}__"`, record.usd_amount_cents);
 }
 
 function shellSingleQuote(value: string): string {

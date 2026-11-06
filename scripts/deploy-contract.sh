@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the AEGIS vault to a fresh NEAR testnet account and record its id.
+# Deploy the Kotha vault to a fresh NEAR testnet account and record its id.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -69,5 +69,5 @@ else
   printf 'NEXT_PUBLIC_NEAR_CONTRACT_ID=%s\n' "${CONTRACT_ID}" >> "${ENV_FILE}"
 fi
 
-echo "==> Deployed AEGIS vault to ${CONTRACT_ID}"
+echo "==> Deployed Kotha vault to ${CONTRACT_ID}"
 echo "    NEXT_PUBLIC_NEAR_CONTRACT_ID=${CONTRACT_ID}"

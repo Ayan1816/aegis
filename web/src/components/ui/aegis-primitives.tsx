@@ -303,3 +303,118 @@ export function EnclaveSwitch({
     </button>
   );
 }
+
+const WAVE_SCALES = [0.35, 0.62, 0.9, 0.48, 1, 0.72, 0.4, 0.84, 0.55, 0.96, 0.44, 0.78];
+
+export function VoiceWaveform({ active, label }: { active: boolean; label: string }) {
+  const reduce = useReducedMotion() ?? false;
+  const moving = active && !reduce;
+  return (
+    <div className="flex items-end gap-2" role="img" aria-label={label}>
+      <div className="flex h-10 items-end gap-[3px]">
+        {WAVE_SCALES.map((scale, index) => (
+          <motion.span
+            key={index}
+            className="w-1 origin-bottom rounded-full bg-gradient-to-t from-[#00D2FF] to-[#00EC97]"
+            style={{ height: 32 }}
+            animate={moving ? { scaleY: [0.28, scale, 0.42, Math.max(0.3, 1.05 - scale)] } : { scaleY: 0.22 }}
+            transition={moving ? { duration: 0.85, repeat: Infinity, delay: index * 0.06, ease: "easeInOut" } : { duration: 0.2 }}
+          />
+        ))}
+      </div>
+      <span className={cn("font-mono text-[10px] uppercase tracking-[0.16em]", active ? "text-[#00EC97]" : "text-white/35")}>
+        {active ? "bn-BD · en-US" : "voice idle"}
+      </span>
+    </div>
+  );
+}
+
+export function KothaStoryBanner({ brand, story }: { brand: string; story: string }) {
+  return (
+    <SpotlightGlassCard>
+      <div className="space-y-1 px-4 py-3">
+        <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[#00D2FF]">{brand}</p>
+        <p className="text-[13px] leading-relaxed text-white/85">{story}</p>
+      </div>
+    </SpotlightGlassCard>
+  );
+}
+
+export function SignatureTamperLab({
+  signature,
+  verifiedLabel,
+  tamperedLabel,
+  tamperLabel,
+  restoreLabel,
+}: {
+  signature: string;
+  verifiedLabel: string;
+  tamperedLabel: string;
+  tamperLabel: string;
+  restoreLabel: string;
+}) {
+  const [tampered, setTampered] = useState(false);
+  const mutated = mutateOneHex(signature);
+  const displayed = tampered ? mutated.value : signature;
+  const verified = recomputeSignatureVerification(signature, displayed);
+
+  return (
+    <div className="mt-3 rounded-xl border border-white/10 bg-black/35 p-2">
+      <div
+        className={cn(
+          "rounded-lg border px-2 py-1 text-[11px] font-semibold tracking-wide",
+          verified
+            ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]"
+            : "animate-pulse border-[#FF3B5C] bg-[#FF3B5C]/25 text-[#ffd0d8]",
+        )}
+      >
+        {verified ? verifiedLabel : tamperedLabel}
+      </div>
+      <p className="mt-2 break-all font-mono text-[10px] leading-relaxed text-white/80">
+        {displayed.split("").map((char, index) => (
+          <span
+            key={`${index}-${char}`}
+            className={tampered && index === mutated.index ? "rounded-sm bg-[#FF3B5C] px-px font-bold text-white" : undefined}
+          >
+            {char}
+          </span>
+        ))}
+      </p>
+      <button
+        type="button"
+        onClick={() => setTampered((current) => !current)}
+        className={cn(
+          "mt-2 inline-flex min-h-9 items-center rounded-lg border px-2.5 py-1 text-left text-[11px] font-semibold",
+          tampered ? "border-[#00EC97]/40 text-[#b8ffe0]" : "border-[#FF3B5C]/50 text-[#ffd0d8]",
+        )}
+      >
+        {tampered ? restoreLabel : tamperLabel}
+      </button>
+    </div>
+  );
+}
+
+function mutateOneHex(signature: string): { value: string; index: number } {
+  const chars = signature.split("");
+  const start = /^0x/i.test(signature) ? 2 : 0;
+  for (let index = start; index < chars.length; index += 1) {
+    if (!/[0-9a-fA-F]/.test(chars[index])) continue;
+    const current = chars[index].toLowerCase();
+    chars[index] = current === "a" ? "b" : "a";
+    return { value: chars.join(""), index };
+  }
+  return { value: `${signature}a`, index: signature.length };
+}
+
+function recomputeSignatureVerification(original: string, displayed: string): boolean {
+  const attested = original.trim();
+  const shown = displayed.trim();
+  const attestedHex = attested.replace(/^0x/i, "");
+  const shownHex = shown.replace(/^0x/i, "");
+  if (attestedHex.length < 64 || shownHex.length < 64 || attestedHex.length !== shownHex.length) return false;
+  let diff = 0;
+  for (let index = 0; index < attested.length; index += 1) {
+    diff |= attested.charCodeAt(index) ^ shown.charCodeAt(index);
+  }
+  return diff === 0;
+}

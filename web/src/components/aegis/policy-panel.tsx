@@ -63,7 +63,7 @@ export function PolicyPanel({
       <SpotlightGlassCard alert={frozen}>
         <div className="space-y-4 p-4">
           <div>
-            <h2 className="text-sm font-semibold tracking-wide text-white">{translate(lang, "policyTitle")}</h2>
+            <h2 className="text-sm font-semibold leading-snug tracking-wide text-white">{translate(lang, "policyTitle")}</h2>
             <p className="mt-1 text-xs text-white/55" title={translate(lang, "policyHint")}>
               {translate(lang, "policyHint")}
             </p>

@@ -199,6 +199,7 @@ export type ExecutionResult = {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   near_ai_chat_id: string;
   tee_signing_address: string;
   request_sha256: string;
@@ -338,7 +339,7 @@ function createDefaultState(): PersistedState {
   return {
     version: 1,
     agentId: process.env.NEAR_INTENTS_AGENT_ID || AGENT_ID,
-    agentName: "AEGIS Prime",
+    agentName: "Kotha",
     ownerAccount: process.env.NEAR_INTENTS_OWNER_ACCOUNT || OWNER_ACCOUNT,
     policyRevision: 1,
     budgetDay: utcDay(),
@@ -351,7 +352,7 @@ function createDefaultState(): PersistedState {
       issuedAt: issuedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
       revoked: false,
-      label: "AEGIS Prime session",
+      label: "Kotha session",
     },
     balances: {
       public: {
@@ -588,13 +589,13 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
   if (txUsd > policy.perTxCapUsd + 1e-9) {
     allowed = false;
     warnings.push(
-      `Per-transaction cap exceeded: this ${intent.action} is $${txUsd.toFixed(2)} and the cap is $${policy.perTxCapUsd.toFixed(2)}.`,
+      `PROHORI_PER_TX_LIMIT_EXCEEDED: this ${intent.action} is $${txUsd.toFixed(2)} and the on-chain per-transaction cap is $${policy.perTxCapUsd.toFixed(2)}.`,
     );
   }
   if (countsAsSpend && projected > daily + 1e-9) {
     allowed = false;
     warnings.push(
-      `Daily budget exceeded: spent today is $${policy.spentTodayUsd.toFixed(2)}, this ${intent.action} is $${txUsd.toFixed(2)}, projected $${projected.toFixed(2)} of the $${daily.toFixed(2)} limit.`,
+      `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${policy.spentTodayUsd.toFixed(2)}, this ${intent.action} is $${txUsd.toFixed(2)}, projected $${projected.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
     );
   }
   if (allowed && countsAsSpend && daily > 0 && projected / daily >= 0.8) {
@@ -726,7 +727,7 @@ export async function rotateOrRevokeGrant(action: "rotate" | "revoke"): Promise<
       issuedAt: issuedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
       revoked: false,
-      label: "AEGIS Prime session",
+      label: "Kotha session",
     };
     const remote = await tryOwnerIntent(state, {
       type: "grant_issue",
@@ -821,6 +822,7 @@ export async function executeIntentWithGrant(
       origin_asset: assetMeta(intent.origin_asset).asset_id,
       destination_asset: assetMeta(intent.destination_asset || intent.origin_asset).asset_id,
       amount_atomic: notional.atomic.toString(),
+      usd_amount_cents: String(Math.max(0, Math.round(preview.budgetImpact.txUsd * 100))),
       near_ai_chat_id: tee.chatId,
       tee_signing_address: tee.signingAddress,
       request_sha256: tee.requestSha256,

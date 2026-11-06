@@ -206,6 +206,7 @@ export type VerifiedExecution = {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   near_ai_chat_id: string;
   tee_signing_address: string;
   request_sha256: string;
@@ -233,6 +234,7 @@ export type ExecutionResult = {
   origin_asset: string;
   destination_asset: string;
   amount_atomic: string;
+  usd_amount_cents: string;
   near_ai_chat_id: string;
   tee_signing_address: string;
   request_sha256: string;
