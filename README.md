@@ -23,13 +23,15 @@ The center column animates a voice waveform for `bn-BD` / `en-US` Web Speech and
 
 | | |
 | --- | --- |
-| Contract ID | `aegis-vault-v1.testnet` |
-| NearBlocks Testnet | https://testnet.nearblocks.io/address/aegis-vault-v1.testnet |
+| Contract ID | `kotha-vault-1793945609.testnet` |
+| NearBlocks Testnet | https://testnet.nearblocks.io/address/kotha-vault-1793945609.testnet |
 | RPC | `https://rpc.testnet.near.org` |
-| App env | `NEXT_PUBLIC_NEAR_CONTRACT_ID=aegis-vault-v1.testnet` in `web/.env.local` and `web/.env.example` |
-| Code default | `DEFAULT_CONTRACT_ID` in `web/src/lib/near-vault-rpc.ts` |
+| App env | `NEXT_PUBLIC_NEAR_CONTRACT_ID=kotha-vault-1793945609.testnet` in `web/.env.local` and `web/.env.example` |
+| Code default | `DEFAULT_CONTRACT_ID` in `web/src/lib/near-vault-rpc.ts` and the telemetry fallback in `web/src/components/aegis/telemetry-bar.tsx` |
+| Faucet receipt | `6edKUMQyRAHpu2ZApdQ56XnXLhtsiomTcL3UvF5QK6o8` |
+| Access key | `ed25519:2AjaJqi8tMPWs9UBTqWJQNJ3tfj7DpAqZBuzaxLgogx8` |
 
-The Testnet RPC is live. A `view_account` for `aegis-vault-v1.testnet` returned `UNKNOWN_ACCOUNT` because this workspace has no compiled `.wasm`, no `near` CLI, and no `~/.near-credentials/testnet/` key, so the account was not created here. The identifier is wired through the app. The 15 Rust unit tests and GitHub Actions are the proof of the spending rules until a wasm deploy lands on that account. `tryChain` falls back to the local audit log for 30 seconds when an RPC view fails.
+`view_account` on `https://rpc.testnet.near.org` for `kotha-vault-1793945609.testnet` returned a live account at block `276450412` (`block_hash` `9i3KFUYx8c4PNWjC9Smej73CCBhZth4vdJsF71yk6hxq`): `amount` `10000000000000000000000000` yoctoNEAR (10 NEAR), `locked` `0`, `storage_usage` `182`, `code_hash` `11111111111111111111111111111111`. That response is an account balance, not `UNKNOWN_ACCOUNT`. The code hash is NEAR's empty-account hash: the account is live, and no WASM is stored on it yet. This workspace has no prebuilt `.wasm` under `contract/target/`, and local `cargo` builds stay off this machine, so `init` and `record_execution` have not been submitted from here. `.github/workflows/ci-deploy.yml` on `ubuntu-latest` runs the 15 contract tests, builds the WASM with `cargo near build non-reproducible-wasm`, deploys it to this account, calls `init`, submits one `record_execution`, then reads `get_vault_info` and `list_executions`. That deploy step signs with GitHub Actions secrets `NEAR_CONTRACT_ID` and `NEAR_PRIVATE_KEY`. The private key is not in git. Until that job succeeds, a contract view has no code to execute. `tryChain` still falls back to the local audit log for 30 seconds when an RPC view fails.
 
 ## How We Beat Existing Agents
 
@@ -96,25 +98,25 @@ npx tsc --noEmit
 Read vault policy and receipts. Replace `<CORRELATION_ID>` with an id from the Shakkhi stream.
 
 ```bash
-near contract call-function as-read-only aegis-vault-v1.testnet get_policy_status \
+near contract call-function as-read-only kotha-vault-1793945609.testnet get_policy_status \
   json-args '{}' \
   network-config testnet now
 ```
 
 ```bash
-near contract call-function as-read-only aegis-vault-v1.testnet get_vault_info \
+near contract call-function as-read-only kotha-vault-1793945609.testnet get_vault_info \
   json-args '{}' \
   network-config testnet now
 ```
 
 ```bash
-near contract call-function as-read-only aegis-vault-v1.testnet get_execution \
+near contract call-function as-read-only kotha-vault-1793945609.testnet get_execution \
   json-args '{"correlation_id":"<CORRELATION_ID>"}' \
   network-config testnet now
 ```
 
 ```bash
-near contract call-function as-read-only aegis-vault-v1.testnet list_executions \
+near contract call-function as-read-only kotha-vault-1793945609.testnet list_executions \
   json-args '{"from_index":0,"limit":20}' \
   network-config testnet now
 ```
@@ -122,7 +124,7 @@ near contract call-function as-read-only aegis-vault-v1.testnet list_executions 
 Record a TEE-signed execution. `usd_amount_cents` and `timestamp_ns` are raw integers. The caller must be the owner or the agent, the vault must not be paused, and the amount must fit Prohori.
 
 ```bash
-near contract call-function as-transaction aegis-vault-v1.testnet record_execution \
+near contract call-function as-transaction kotha-vault-1793945609.testnet record_execution \
   json-args '<VerifiedExecution JSON>' \
   prepaid-gas '100.0 Tgas' \
   attached-deposit '0 NEAR' \
@@ -136,6 +138,14 @@ Check a hardware chat signature against NEAR AI Cloud:
 ```bash
 curl -sS "https://cloud-api.near.ai/v1/signature/<CHAT_ID>?model=deepseek%2Fdeepseek-v3.2&signing_algo=ecdsa" \
   -H "Authorization: Bearer $NEAR_AI_CLOUD_API_KEY"
+```
+
+Confirm the live account. A result with `amount` is the account. `UNKNOWN_ACCOUNT` means the id is not on Testnet.
+
+```bash
+curl -sS https://rpc.testnet.near.org \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"view","method":"query","params":{"request_type":"view_account","finality":"final","account_id":"kotha-vault-1793945609.testnet"}}'
 ```
 
 Confirm the Testnet RPC itself:
@@ -155,6 +165,8 @@ cargo near build non-reproducible-wasm
 bash scripts/deploy-contract.sh
 ```
 
+`bash scripts/deploy-contract.sh` creates a fresh faucet account. The verified account `kotha-vault-1793945609.testnet` is the one `.github/workflows/ci-deploy.yml` deploys to.
+
 ```bash
 cd web
 npm install
@@ -164,7 +176,7 @@ npm run dev
 Open `http://localhost:3000`. `web/.env.local` is gitignored. Copy `web/.env.example` and keep `NEAR_AI_CLOUD_API_KEY` only on the machine that runs the enclave.
 
 ```bash
-NEXT_PUBLIC_NEAR_CONTRACT_ID=aegis-vault-v1.testnet
+NEXT_PUBLIC_NEAR_CONTRACT_ID=kotha-vault-1793945609.testnet
 NEAR_RPC_URL=https://rpc.testnet.near.org
 NEAR_AI_CLOUD_API_KEY=
 NEAR_AI_MODEL=deepseek/deepseek-v3.2
@@ -173,4 +185,4 @@ NEAR_INTENTS_AGENT_API_KEY=
 NEAR_INTENTS_GRANT_TOKEN=
 ```
 
-`node_modules`, `contract/target`, and `web/.env.local` stay out of git. Pushes to `main` run `.github/workflows/ci.yml`.
+`node_modules`, `contract/target`, and `web/.env.local` stay out of git. Pushes to `main` run `.github/workflows/ci.yml` (contract tests and web typecheck) and `.github/workflows/ci-deploy.yml` (those checks, plus the WASM build and Testnet deploy) on GitHub-hosted `ubuntu-latest`.

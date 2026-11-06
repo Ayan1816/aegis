@@ -1,0 +1,127 @@
+name: CI Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cloud-build-and-deploy:
+    name: cloud-build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable and wasm32-unknown-unknown
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Run contract unit tests
+        working-directory: contract
+        run: cargo test --verbose
+
+      - name: Install cargo-near and near-cli-rs
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/near-cli-rs/releases/latest/download/near-cli-rs-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          cargo near --version
+          near --version
+
+      - name: Build contract WASM
+        working-directory: contract
+        run: cargo near build non-reproducible-wasm
+
+      - name: Deploy WASM, init, and record one execution
+        working-directory: contract
+        env:
+          NEAR_CONTRACT_ID: ${{ secrets.NEAR_CONTRACT_ID }}
+          NEAR_PRIVATE_KEY: ${{ secrets.NEAR_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NEAR_PRIVATE_KEY:-}" ] || [ -z "${NEAR_CONTRACT_ID:-}" ]; then
+            echo "NEAR_PRIVATE_KEY or NEAR_CONTRACT_ID is unset. Skipping Testnet deploy."
+            exit 0
+          fi
+          WASM="target/near/aegis_vault.wasm"
+          if [ ! -f "$WASM" ]; then
+            echo "WASM artifact missing at $WASM"
+            exit 1
+          fi
+          near contract deploy "$NEAR_CONTRACT_ID" \
+            use-file "$WASM" \
+            without-init-call \
+            network-config testnet \
+            sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
+            send
+
+          if ! near contract call-function as-read-only "$NEAR_CONTRACT_ID" get_vault_info \
+            json-args '{}' \
+            network-config testnet \
+            now
+          then
+            echo "Vault view failed. Calling init."
+            INIT_ARGS=$(printf '{"owner":"%s","agent_account":"%s"}' "$NEAR_CONTRACT_ID" "$NEAR_CONTRACT_ID")
+            if ! near contract call-function as-transaction "$NEAR_CONTRACT_ID" init \
+              json-args "$INIT_ARGS" \
+              prepaid-gas '100 TeraGas' \
+              attached-deposit '0 NEAR' \
+              sign-as "$NEAR_CONTRACT_ID" \
+              network-config testnet \
+              sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
+              send
+            then
+              echo "init did not apply. Confirming the vault is already initialized."
+              near contract call-function as-read-only "$NEAR_CONTRACT_ID" get_vault_info \
+                json-args '{}' \
+                network-config testnet \
+                now
+            fi
+          fi
+
+          CORR="kotha-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REQ_HASH="$(printf 'a%.0s' {1..64})"
+          RES_HASH="$(printf 'b%.0s' {1..64})"
+          SIG="$(printf 'c%.0s' {1..128})"
+          ARGS=$(printf '{"correlation_id":"%s","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-ci","tee_signing_address":"0xtee","request_sha256":"%s","response_sha256":"%s","tee_signature":"%s","timestamp_ns":1000}' \
+            "$CORR" "$REQ_HASH" "$RES_HASH" "$SIG")
+          near contract call-function as-transaction "$NEAR_CONTRACT_ID" record_execution \
+            json-args "$ARGS" \
+            prepaid-gas '100 TeraGas' \
+            attached-deposit '0 NEAR' \
+            sign-as "$NEAR_CONTRACT_ID" \
+            network-config testnet \
+            sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
+            send
+
+          echo "Verifying get_vault_info"
+          near contract call-function as-read-only "$NEAR_CONTRACT_ID" get_vault_info \
+            json-args '{}' \
+            network-config testnet \
+            now
+          echo "Verifying list_executions"
+          near contract call-function as-read-only "$NEAR_CONTRACT_ID" list_executions \
+            json-args '{"from_index":0,"limit":20}' \
+            network-config testnet \
+            now
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install and typecheck the web app
+        working-directory: web
+        run: |
+          npm ci
+          npx tsc --noEmit

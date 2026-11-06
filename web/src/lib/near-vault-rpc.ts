@@ -2,7 +2,7 @@ import { createHash, createSign, generateKeyPairSync, type KeyObject } from "cry
 import fs from "fs";
 import { aegisStatePath, writeJsonFile } from "./aegis-paths";
 
-export const DEFAULT_CONTRACT_ID = "aegis-vault-v1.testnet";
+export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 export const DEFAULT_RPC_URL = "https://rpc.testnet.near.org";
 const LOG_FILE = "aegis-vault-executions.json";
 const AUDIT_KEY_FILE = "aegis-vault-audit-key.json";
