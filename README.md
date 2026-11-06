@@ -31,7 +31,7 @@ The center column animates a voice waveform for `bn-BD` / `en-US` Web Speech and
 | Faucet receipt | `6edKUMQyRAHpu2ZApdQ56XnXLhtsiomTcL3UvF5QK6o8` |
 | Access key | `ed25519:2AjaJqi8tMPWs9UBTqWJQNJ3tfj7DpAqZBuzaxLgogx8` |
 
-`view_account` on `https://rpc.testnet.near.org` for `kotha-vault-1793945609.testnet` returned a live account at block `276450412` (`block_hash` `9i3KFUYx8c4PNWjC9Smej73CCBhZth4vdJsF71yk6hxq`): `amount` `10000000000000000000000000` yoctoNEAR (10 NEAR), `locked` `0`, `storage_usage` `182`, `code_hash` `11111111111111111111111111111111`. That response is an account balance, not `UNKNOWN_ACCOUNT`. The code hash is NEAR's empty-account hash: the account is live, and no WASM is stored on it yet. This workspace has no prebuilt `.wasm` under `contract/target/`, and local `cargo` builds stay off this machine, so `init` and `record_execution` have not been submitted from here. `.github/workflows/ci-deploy.yml` on `ubuntu-latest` runs the 15 contract tests, builds the WASM with `cargo near build non-reproducible-wasm`, deploys it to this account, calls `init`, submits one `record_execution`, then reads `get_vault_info` and `list_executions`. That deploy step signs with GitHub Actions secrets `NEAR_CONTRACT_ID` and `NEAR_PRIVATE_KEY`. The private key is not in git. Until that job succeeds, a contract view has no code to execute. `tryChain` still falls back to the local audit log for 30 seconds when an RPC view fails.
+`view_account` on `https://rpc.testnet.near.org` for `kotha-vault-1793945609.testnet` returned a live account at block `276450412` (`block_hash` `9i3KFUYx8c4PNWjC9Smej73CCBhZth4vdJsF71yk6hxq`): `amount` `10000000000000000000000000` yoctoNEAR (10 NEAR), `locked` `0`, `storage_usage` `182`. That response is an account balance, not `UNKNOWN_ACCOUNT`. GitHub Actions then deployed the WASM in transaction [`41QeqELu3VNsYqWeX9C1DFuEnx6Ahg9fnRaUe78xyi1E`](https://explorer.testnet.near.org/transactions/41QeqELu3VNsYqWeX9C1DFuEnx6Ahg9fnRaUe78xyi1E) and called `init` in [`64p613XACop5eNxZuPyqFWyYG6rnPYAgbD9yNsvrfdPk`](https://explorer.testnet.near.org/transactions/64p613XACop5eNxZuPyqFWyYG6rnPYAgbD9yNsvrfdPk). Owner and agent are both this contract account. A follow-up `view_account` at block `276451253` shows `code_hash` `BDxrLrMtULBbjkiQx7Po1Q1pqdaCv66ydzVw9V1ksgs3`, `amount` `9998475842214217300000000` yoctoNEAR, and `storage_usage` `163712`. `get_vault_info` returns `["kotha-vault-1793945609.testnet","kotha-vault-1793945609.testnet",false,0]` and `get_policy_status` returns `[10000,5000,0,false]`. `.github/workflows/ci-deploy.yml` on `ubuntu-latest` runs the 15 contract tests, builds with `cargo near build non-reproducible-wasm`, deploys, calls `init` only when `get_vault_info` is not live yet, submits one `record_execution`, then reads `get_vault_info` and `list_executions`. The deploy step signs with GitHub Actions secrets `NEAR_CONTRACT_ID` and `NEAR_PRIVATE_KEY`. The private key is not in git. `record_execution` args must be `{"execution": { ...VerifiedExecution }}`. `tryChain` still falls back to the local audit log for 30 seconds when an RPC view fails.
 
 ## How We Beat Existing Agents
 
@@ -121,14 +121,14 @@ near contract call-function as-read-only kotha-vault-1793945609.testnet list_exe
   network-config testnet now
 ```
 
-Record a TEE-signed execution. `usd_amount_cents` and `timestamp_ns` are raw integers. The caller must be the owner or the agent, the vault must not be paused, and the amount must fit Prohori.
+Record a TEE-signed execution. The method argument is `{"execution": { ... }}`. `usd_amount_cents` and `timestamp_ns` are raw integers. The caller must be the owner or the agent (`kotha-vault-1793945609.testnet` after `init`), the vault must not be paused, and the amount must fit Prohori. Use a new `correlation_id` for each call.
 
 ```bash
 near contract call-function as-transaction kotha-vault-1793945609.testnet record_execution \
-  json-args '<VerifiedExecution JSON>' \
+  json-args '{"execution":{"correlation_id":"demo-1","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-demo","tee_signing_address":"0xtee","request_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","response_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tee_signature":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","timestamp_ns":1000}}' \
   prepaid-gas '100.0 Tgas' \
   attached-deposit '0 NEAR' \
-  sign-as <OWNER_ACCOUNT> \
+  sign-as kotha-vault-1793945609.testnet \
   network-config testnet \
   sign-with-keychain send
 ```

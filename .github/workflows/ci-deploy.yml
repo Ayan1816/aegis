@@ -91,7 +91,7 @@ jobs:
           REQ_HASH="$(printf 'a%.0s' {1..64})"
           RES_HASH="$(printf 'b%.0s' {1..64})"
           SIG="$(printf 'c%.0s' {1..128})"
-          ARGS=$(printf '{"correlation_id":"%s","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-ci","tee_signing_address":"0xtee","request_sha256":"%s","response_sha256":"%s","tee_signature":"%s","timestamp_ns":1000}' \
+          ARGS=$(printf '{"execution":{"correlation_id":"%s","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-ci","tee_signing_address":"0xtee","request_sha256":"%s","response_sha256":"%s","tee_signature":"%s","timestamp_ns":1000}}' \
             "$CORR" "$REQ_HASH" "$RES_HASH" "$SIG")
           near contract call-function as-transaction "$NEAR_CONTRACT_ID" record_execution \
             json-args "$ARGS" \
