@@ -87,20 +87,50 @@ jobs:
             fi
           fi
 
-          CORR="kotha-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          REQ_HASH="$(printf 'a%.0s' {1..64})"
-          RES_HASH="$(printf 'b%.0s' {1..64})"
-          SIG="$(printf 'c%.0s' {1..128})"
-          ARGS=$(printf '{"execution":{"correlation_id":"%s","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-ci","tee_signing_address":"0xtee","request_sha256":"%s","response_sha256":"%s","tee_signature":"%s","timestamp_ns":1000}}' \
-            "$CORR" "$REQ_HASH" "$RES_HASH" "$SIG")
-          near contract call-function as-transaction "$NEAR_CONTRACT_ID" record_execution \
-            json-args "$ARGS" \
-            prepaid-gas '100 TeraGas' \
-            attached-deposit '0 NEAR' \
-            sign-as "$NEAR_CONTRACT_ID" \
-            network-config testnet \
-            sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
-            send
+          TOTAL=$(python3 - "$NEAR_CONTRACT_ID" <<'PY'
+          import base64, json, sys, urllib.request
+          account = sys.argv[1]
+          body = json.dumps({
+              "jsonrpc": "2.0",
+              "id": "info",
+              "method": "query",
+              "params": {
+                  "request_type": "call_function",
+                  "finality": "final",
+                  "account_id": account,
+                  "method_name": "get_vault_info",
+                  "args_base64": base64.b64encode(b"{}").decode(),
+              },
+          }).encode()
+          req = urllib.request.Request(
+              "https://rpc.testnet.near.org",
+              data=body,
+              headers={"Content-Type": "application/json"},
+          )
+          data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+          info = json.loads(bytes(data["result"]["result"]).decode())
+          print(info[3])
+          PY
+          )
+          echo "Existing executions: $TOTAL"
+          if [ "$TOTAL" = "0" ]; then
+            CORR="kotha-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            REQ_HASH="$(printf 'a%.0s' {1..64})"
+            RES_HASH="$(printf 'b%.0s' {1..64})"
+            SIG="$(printf 'c%.0s' {1..128})"
+            ARGS=$(printf '{"execution":{"correlation_id":"%s","agent_id":"agent-aegis-prime.near","action_type":"swap","origin_asset":"nep141:wrap.near","destination_asset":"nep141:usdt.tether-token.near","amount_atomic":"2000000000000000000000000","usd_amount_cents":100,"near_ai_chat_id":"kotha-ci","tee_signing_address":"0xtee","request_sha256":"%s","response_sha256":"%s","tee_signature":"%s","timestamp_ns":1000}}' \
+              "$CORR" "$REQ_HASH" "$RES_HASH" "$SIG")
+            near contract call-function as-transaction "$NEAR_CONTRACT_ID" record_execution \
+              json-args "$ARGS" \
+              prepaid-gas '100 TeraGas' \
+              attached-deposit '0 NEAR' \
+              sign-as "$NEAR_CONTRACT_ID" \
+              network-config testnet \
+              sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
+              send
+          else
+            echo "Vault already has a live receipt. Skipping record_execution."
+          fi
 
           echo "Verifying get_vault_info"
           near contract call-function as-read-only "$NEAR_CONTRACT_ID" get_vault_info \
