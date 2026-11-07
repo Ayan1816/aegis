@@ -26,6 +26,7 @@ export function PolicyPanel({
   rotateBusy,
   revokeBusy,
   freezeBusy,
+  ownerLock = null,
   onSave,
   onRotate,
   onRevoke,
@@ -40,6 +41,7 @@ export function PolicyPanel({
   rotateBusy: boolean;
   revokeBusy: boolean;
   freezeBusy: boolean;
+  ownerLock?: string | null;
   onSave: (patch: PolicyPatch) => Promise<void>;
   onRotate: () => void;
   onRevoke: () => void;
@@ -67,6 +69,7 @@ export function PolicyPanel({
             <p className="mt-1 text-xs text-white/55" title={translate(lang, "policyHint")}>
               {translate(lang, "policyHint")}
             </p>
+            {ownerLock ? <p className="mt-2 text-[11px] leading-snug text-amber-200/90">{translate(lang, "readOnly")}</p> : null}
           </div>
 
           <div className="flex items-center gap-4">
@@ -97,6 +100,8 @@ export function PolicyPanel({
               max={1000}
               step={1}
               value={draft.dailyBudgetUsd}
+              disabled={Boolean(ownerLock)}
+              title={ownerLock || undefined}
               aria-label={translate(lang, "dailyBudget")}
               onChange={(event) => {
                 setDirty(true);
@@ -117,6 +122,8 @@ export function PolicyPanel({
               max={1000}
               step={1}
               value={draft.perTxCapUsd}
+              disabled={Boolean(ownerLock)}
+              title={ownerLock || undefined}
               aria-label={translate(lang, "perTx")}
               onChange={(event) => {
                 setDirty(true);
@@ -134,8 +141,9 @@ export function PolicyPanel({
             </div>
             <EnclaveSwitch
               checked={draft.confidentialShardEnabled}
+              disabled={Boolean(ownerLock)}
               label={translate(lang, "shardTitle")}
-              hint={translate(lang, "shardHint")}
+              hint={ownerLock || translate(lang, "shardHint")}
               onChange={(next) => {
                 setDirty(true);
                 setDraft((current) => ({ ...current, confidentialShardEnabled: next }));
@@ -143,7 +151,7 @@ export function PolicyPanel({
             />
           </div>
 
-          <fieldset>
+          <fieldset disabled={Boolean(ownerLock)} className={ownerLock ? "opacity-60" : undefined}>
             <legend className="mb-2 text-[10px] uppercase tracking-[0.16em] text-white/45" title={translate(lang, "allowedHint")}>
               {translate(lang, "allowed")}
             </legend>
@@ -164,6 +172,7 @@ export function PolicyPanel({
                             : [...current.allowedActions, action],
                         }));
                       }}
+                      disabled={Boolean(ownerLock)}
                       className="accent-[#00EC97]"
                     />
                     <span>{translate(lang, ACTION_KEY[action])}</span>
@@ -174,8 +183,11 @@ export function PolicyPanel({
             </div>
           </fieldset>
 
+          <span title={ownerLock || undefined} className="block">
           <ShimmerActionButton
             loading={policyBusy}
+            disabled={Boolean(ownerLock)}
+            title={ownerLock || undefined}
             onClick={() => {
               void onSave({
                 dailyBudgetUsd: draft.dailyBudgetUsd,
@@ -189,6 +201,7 @@ export function PolicyPanel({
           >
             {translate(lang, "savePolicy")}
           </ShimmerActionButton>
+          </span>
         </div>
       </SpotlightGlassCard>
 
@@ -240,25 +253,32 @@ export function PolicyPanel({
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-2">
-            <ShimmerActionButton loading={rotateBusy} onClick={onRotate}>
-              {translate(lang, "rotate")}
-            </ShimmerActionButton>
-            <ShimmerActionButton variant="ghost" loading={revokeBusy} onClick={onRevoke}>
-              {translate(lang, "revoke")}
-            </ShimmerActionButton>
+            <span title={ownerLock || undefined} className="block min-w-0">
+              <ShimmerActionButton loading={rotateBusy} disabled={Boolean(ownerLock)} title={ownerLock || undefined} onClick={onRotate}>
+                {translate(lang, "rotate")}
+              </ShimmerActionButton>
+            </span>
+            <span title={ownerLock || undefined} className="block min-w-0">
+              <ShimmerActionButton variant="ghost" loading={revokeBusy} disabled={Boolean(ownerLock)} title={ownerLock || undefined} onClick={onRevoke}>
+                {translate(lang, "revoke")}
+              </ShimmerActionButton>
+            </span>
           </div>
         </div>
       </SpotlightGlassCard>
 
-      <ShimmerActionButton
-        variant="danger"
-        loading={freezeBusy}
-        title={frozen ? translate(lang, "unfreezeHint") : translate(lang, "freezeHint")}
-        onClick={onFreeze}
-        className={frozen ? "animate-pulse" : ""}
-      >
-        {frozen ? translate(lang, "unfreeze") : translate(lang, "freeze")}
-      </ShimmerActionButton>
+      <span title={ownerLock || (frozen ? translate(lang, "unfreezeHint") : translate(lang, "freezeHint"))} className="block">
+        <ShimmerActionButton
+          variant="danger"
+          loading={freezeBusy}
+          disabled={Boolean(ownerLock)}
+          title={ownerLock || (frozen ? translate(lang, "unfreezeHint") : translate(lang, "freezeHint"))}
+          onClick={onFreeze}
+          className={frozen ? "animate-pulse" : ""}
+        >
+          {frozen ? translate(lang, "unfreeze") : translate(lang, "freeze")}
+        </ShimmerActionButton>
+      </span>
     </div>
   );
 }

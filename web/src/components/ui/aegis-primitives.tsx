@@ -342,33 +342,44 @@ export function KothaStoryBanner({ brand, story }: { brand: string; story: strin
 
 export function SignatureTamperLab({
   signature,
+  serverVerified,
   verifiedLabel,
+  unverifiedLabel,
   tamperedLabel,
   tamperLabel,
   restoreLabel,
+  reason,
 }: {
   signature: string;
+  serverVerified: boolean;
   verifiedLabel: string;
+  unverifiedLabel: string;
   tamperedLabel: string;
   tamperLabel: string;
   restoreLabel: string;
+  reason?: string;
 }) {
   const [tampered, setTampered] = useState(false);
   const mutated = mutateOneHex(signature);
   const displayed = tampered ? mutated.value : signature;
-  const verified = recomputeSignatureVerification(signature, displayed);
+  const intact = recomputeSignatureVerification(signature, displayed);
+  const verified = serverVerified && intact;
+  const showTamper = serverVerified && !intact;
 
   return (
     <div className="mt-3 rounded-xl border border-white/10 bg-black/35 p-2">
       <div
+        title={verified ? undefined : reason}
         className={cn(
-          "rounded-lg border px-2 py-1 text-[11px] font-semibold tracking-wide",
+          "whitespace-normal break-words rounded-lg border px-2 py-1 text-[11px] font-semibold leading-snug",
           verified
             ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]"
-            : "animate-pulse border-[#FF3B5C] bg-[#FF3B5C]/25 text-[#ffd0d8]",
+            : showTamper
+              ? "animate-pulse border-[#FF3B5C] bg-[#FF3B5C]/25 text-[#ffd0d8]"
+              : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]",
         )}
       >
-        {verified ? verifiedLabel : tamperedLabel}
+        {verified ? verifiedLabel : showTamper ? tamperedLabel : unverifiedLabel}
       </div>
       <p className="mt-2 break-all font-mono text-[10px] leading-relaxed text-white/80">
         {displayed.split("").map((char, index) => (

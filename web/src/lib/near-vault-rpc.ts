@@ -1,11 +1,11 @@
-import { createHash, createSign, generateKeyPairSync, type KeyObject } from "crypto";
+import { createHash } from "crypto";
 import fs from "fs";
 import { aegisStatePath, writeJsonFile } from "./aegis-paths";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 export const DEFAULT_RPC_URL = "https://rpc.testnet.near.org";
 const LOG_FILE = "aegis-vault-executions.json";
-const AUDIT_KEY_FILE = "aegis-vault-audit-key.json";
+const DEMO_EPOCH_NS = 1_700_000_000_000_000_000n;
 const ACTION_TYPES = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
 
 export type VerifiedExecution = {
@@ -39,12 +39,6 @@ export type VerificationCommands = {
   get_execution: string;
 };
 
-type AuditKey = {
-  privateKeyPem: string;
-  publicKeyPem: string;
-  signingAddress: string;
-};
-
 type LogFile = {
   version: 1;
   executions: VerifiedExecution[];
@@ -53,7 +47,7 @@ type LogFile = {
 let rpcFailUntil = 0;
 
 export function contractId(): string {
-  return process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID || DEFAULT_CONTRACT_ID;
+  return process.env.NEXT_PUBLIC_CONTRACT_ID || process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID || DEFAULT_CONTRACT_ID;
 }
 
 export function rpcUrl(): string {
@@ -81,6 +75,24 @@ export async function getVaultInfo(): Promise<VaultInfo> {
     totalExecutions: Math.max(Number(chain[3]) || 0, local.executions.length),
     source: "merged",
   };
+}
+
+export async function findExecution(correlationId: string): Promise<VerifiedExecution | null> {
+  const local = readLog().executions.find((row) => row.correlation_id === correlationId);
+  if (local) return local;
+  const remote = await tryChain<unknown>("get_execution", { correlation_id: correlationId });
+  if (remote == null) return null;
+  return normalizeExecution(remote);
+}
+
+export async function readExecutionRaw(correlationId: string): Promise<string | null> {
+  if (Date.now() < rpcFailUntil) return null;
+  try {
+    return await callViewText("get_execution", { correlation_id: correlationId });
+  } catch {
+    rpcFailUntil = Date.now() + 30_000;
+    return null;
+  }
 }
 
 export async function listExecutions(limit = 50): Promise<VerifiedExecution[]> {
@@ -124,6 +136,12 @@ async function tryChain<T>(method: string, args: Record<string, unknown>): Promi
 }
 
 async function callView<T>(method: string, args: Record<string, unknown>): Promise<T> {
+  const text = await callViewText(method, args);
+  if (!text) return null as T;
+  return JSON.parse(text) as T;
+}
+
+async function callViewText(method: string, args: Record<string, unknown>): Promise<string> {
   const response = await fetch(rpcUrl(), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -151,9 +169,7 @@ async function callView<T>(method: string, args: Record<string, unknown>): Promi
   if (payload.result?.error) throw new Error(payload.result.error);
   const bytes = payload.result?.result;
   if (!Array.isArray(bytes)) throw new Error(`NEAR view ${method} returned no result bytes.`);
-  const text = Buffer.from(bytes).toString("utf8");
-  if (!text) return null as T;
-  return JSON.parse(text) as T;
+  return Buffer.from(bytes).toString("utf8");
 }
 
 function readLog(): LogFile {
@@ -220,8 +236,7 @@ function seedExecution(input: {
   const responseBody = JSON.stringify(input.response);
   const request_sha256 = sha256(requestBody);
   const response_sha256 = sha256(responseBody);
-  const key = loadAuditKey();
-  const timestamp_ns = (BigInt(Date.now() - input.ageMs) * BigInt(1000000)).toString();
+  const timestamp_ns = (DEMO_EPOCH_NS - BigInt(input.ageMs) * BigInt(1_000_000)).toString();
   return {
     correlation_id: input.correlation_id,
     agent_id: "agent-aegis-prime.near",
@@ -231,10 +246,10 @@ function seedExecution(input: {
     amount_atomic: input.amount_atomic,
     usd_amount_cents: input.usd_amount_cents,
     near_ai_chat_id: input.chat_id,
-    tee_signing_address: key.signingAddress,
+    tee_signing_address: `0x${sha256("kotha-demo-audit-v1").slice(0, 40)}`,
     request_sha256,
     response_sha256,
-    tee_signature: sign(key.privateKeyPem, `${request_sha256}:${response_sha256}`),
+    tee_signature: `0x${sha256(`${input.correlation_id}:${request_sha256}:${response_sha256}`)}`,
     timestamp_ns,
   };
 }
@@ -316,8 +331,8 @@ function normalizeExecution(value: unknown): VerifiedExecution | null {
 
 function mergeExecutions(remote: VerifiedExecution[], local: VerifiedExecution[]): VerifiedExecution[] {
   const byId = new Map<string, VerifiedExecution>();
-  for (const row of local) byId.set(row.correlation_id, row);
   for (const row of remote) byId.set(row.correlation_id, row);
+  for (const row of local) byId.set(row.correlation_id, row);
   return [...byId.values()].sort((left, right) => {
     const a = BigInt(left.timestamp_ns);
     const b = BigInt(right.timestamp_ns);
@@ -339,40 +354,6 @@ function executionJson(record: VerifiedExecution): string {
 
 function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function loadAuditKey(): AuditKey {
-  const file = aegisStatePath(AUDIT_KEY_FILE);
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as AuditKey;
-    if (parsed.privateKeyPem && parsed.signingAddress) return parsed;
-  } catch {
-    // Generate the audit key below.
-  }
-  const { privateKey, publicKey } = generateEc();
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const record: AuditKey = {
-    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-    publicKeyPem,
-    signingAddress: `0x${createHash("sha256").update(publicKeyPem).digest("hex").slice(-40)}`,
-  };
-  writeJsonFile(file, record);
-  return record;
-}
-
-function generateEc(): { privateKey: KeyObject; publicKey: KeyObject } {
-  try {
-    return generateKeyPairSync("ec", { namedCurve: "secp256k1" });
-  } catch {
-    return generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  }
-}
-
-function sign(privateKeyPem: string, message: string): string {
-  const signer = createSign("SHA256");
-  signer.update(message);
-  signer.end();
-  return `0x${signer.sign(privateKeyPem).toString("hex")}`;
 }
 
 function sha256(value: string): string {

@@ -1,15 +1,8 @@
-import {
-  createHash,
-  createPublicKey,
-  createSign,
-  createVerify,
-  generateKeyPairSync,
-  randomBytes,
-  type KeyObject,
-} from "crypto";
-import fs from "fs";
-import { aegisStatePath, writeJsonFile } from "./aegis-paths";
-import { BIP39_ENGLISH } from "./bip39-english";
+import { createHash, randomBytes } from "crypto";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import { redactSensitiveText } from "./pii-redact";
+import { interpretChatBody, partialExplanation, type LoaderStep } from "./chat-stream";
 import {
   assetMeta,
   canonicalAsset,
@@ -32,7 +25,12 @@ export const TEE_MODELS = [
 
 export type TeeModelId = (typeof TEE_MODELS)[number];
 export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED";
-export type AttestationMode = "hardware-tee" | "hardware-chat-local-signature" | "local-enclave-fallback";
+export type AttestationMode = "hardware-tee" | "unverified";
+
+export type TeeVerification = {
+  status: "verified" | "unverified";
+  reason: string;
+};
 
 export type CopilotIntent = AegisIntent;
 
@@ -53,7 +51,7 @@ export type RedactionResult = {
 
 export type ChatCompletionRequest = {
   model: string;
-  stream: false;
+  stream: true;
   response_format: { type: "json_object" };
   messages: Array<{ role: "system" | "user"; content: string }>;
 };
@@ -74,6 +72,7 @@ export type AttestedInference = {
   decision: CopilotDecision;
   rawResponseText: string;
   request: ChatCompletionRequest;
+  verification: TeeVerification;
   hardware: {
     chat_status: number | null;
     signature: unknown;
@@ -97,11 +96,11 @@ export type EnclaveTelemetry = {
   detail: string;
 };
 
-const BIP39 = new Set(BIP39_ENGLISH);
-const KEY_FILE = "aegis-tee-enclave-key.json";
 const DEFAULT_BASE_URL = "https://cloud-api.near.ai/v1";
-const CHAT_TIMEOUT_MS = 12_000;
-const ATTESTATION_TIMEOUT_MS = 8_000;
+const CHAT_TIMEOUT_MS = 60_000;
+const EVIDENCE_TIMEOUT_MS = 60_000;
+const EVIDENCE_RETRIES = 2;
+const PRIVACY_TIMEOUT_MS = 8_000;
 
 const SYSTEM_PROMPT = [
   "You are Kotha (কথা), the Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Tagline: Speak. Verify. Execute.",
@@ -114,8 +113,8 @@ const SYSTEM_PROMPT = [
   "Use these asset ids only: nep141:wrap.near (wNEAR), nep141:usdt.tether-token.near (USDT), nep141:usdc.near (USDC).",
   "amount is a decimal string in human token units, not atomic units.",
   "confidential is true for shield and for any action that must settle on intents.far.",
-  "Shield and unshield move the agent's own balance between intents.near and intents.far and do not increase daily outflow.",
-  "Swap, transfer, and withdraw count against dailyBudgetUsd. perTxCapUsd applies to every action.",
+  "Shield and unshield move the agent's own balance between intents.near and intents.far. They still count toward today's spend.",
+  "Swap, transfer, withdraw, shield, and unshield all count against dailyBudgetUsd. projected spend is current spend plus this transaction. perTxCapUsd applies to every action.",
   "policy_status is BLOCKED when the agent is frozen, the action or asset is not allowed, the confidential shard is required but disabled, the per-transaction cap is exceeded, or the projected daily spend exceeds dailyBudgetUsd.",
   "policy_status is WARNING when the action is still inside those caps but projected utilization is at least 80 percent.",
   "policy_status is PASS otherwise. intent is null when the user did not ask for a swap, transfer, withdraw, shield, or unshield.",
@@ -123,16 +122,13 @@ const SYSTEM_PROMPT = [
   '{"explanation": string, "risk_score": number, "policy_status": "PASS" | "WARNING" | "BLOCKED", "policy_reason": string, "intent": null | {"action": "swap" | "transfer" | "withdraw" | "shield" | "unshield", "origin_asset": string, "destination_asset": string, "amount": string, "amount_usd_estimate": number, "max_slippage_bps": number, "recipient": string, "chain": string, "confidential": boolean}}',
 ].join("\n");
 
-type EnclaveKey = {
-  curve: "secp256k1" | "prime256v1";
-  privateKeyPem: string;
-  publicKeyPem: string;
-  signingAddress: string;
+type ReportEntry = {
+  address: string;
+  algo: string;
+  intel_quote: string;
+  nvidia_payload: string;
+  source: "model" | "gateway" | "other";
 };
-
-type PiiType = "email" | "phone" | "api_key" | "seed_phrase";
-
-let cachedKey: EnclaveKey | null = null;
 
 export function nearAiBaseUrl(): string {
   return (process.env.NEAR_AI_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
@@ -148,32 +144,11 @@ export function isTeeModel(value: string): value is TeeModelId {
 }
 
 export async function redactPII(text: string): Promise<RedactionResult> {
-  const originalLength = text.length;
-  const local = redactDeterministic(text);
-  const types = new Set<PiiType>(local.types);
-  let redactedText = local.text;
-  let redactionsCount = local.count;
-  const apiKey = nearAiApiKey();
-  if (apiKey) {
-    try {
-      const remote = await callPrivacyFilter(text, apiKey);
-      if (remote.text) {
-        const tightened = redactDeterministic(remote.text);
-        redactedText = tightened.text;
-        redactionsCount = Math.max(redactionsCount, tightened.count, remote.count ?? 0);
-        for (const piiType of remote.types) types.add(piiType);
-        for (const piiType of tightened.types) types.add(piiType);
-      }
-    } catch {
-      // The local redaction already ran, so a privacy-filter outage cannot leak PII onward.
-    }
-  }
-  return {
-    originalLength,
-    redactedText,
-    redactionsCount,
-    piiTypesFound: [...types],
-  };
+  return redactSensitiveText(text, {
+    apiKey: nearAiApiKey(),
+    baseUrl: nearAiBaseUrl(),
+    timeoutMs: PRIVACY_TIMEOUT_MS,
+  });
 }
 
 export async function runAttestedInference(params: {
@@ -185,32 +160,17 @@ export async function runAttestedInference(params: {
   policyContext: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   balancesContext: any;
+  onStep?: (step: LoaderStep) => void;
+  onDelta?: (text: string) => void;
 }): Promise<AttestedInference> {
+  params.onStep?.("redacting");
   const model = resolveModel(params.model);
   const redaction = params.autoRedact ? await redactPII(params.userMessage) : null;
   const userMessage = redaction?.redactedText ?? params.userMessage;
   const request = buildChatRequest(model, userMessage, params.policyContext, params.balancesContext);
   const requestBodyStr = JSON.stringify(request);
   const requestSha256 = sha256Hex(requestBodyStr);
-  const apiKey = nearAiApiKey();
-  if (apiKey) {
-    try {
-      return await attestHardware({
-        apiKey,
-        model,
-        request,
-        requestBodyStr,
-        requestSha256,
-        redaction,
-        userMessage,
-        policyContext: params.policyContext,
-        balancesContext: params.balancesContext,
-      });
-    } catch {
-      // Hardware chat or the network is unavailable. Fall through to the local enclave.
-    }
-  }
-  return attestLocally({
+  const shared = {
     model,
     request,
     requestSha256,
@@ -218,10 +178,82 @@ export async function runAttestedInference(params: {
     userMessage,
     policyContext: params.policyContext,
     balancesContext: params.balancesContext,
-    mode: "local-enclave-fallback",
-    hardware: null,
-    responseText: null,
-    chatId: null,
+  };
+  const fallback = (args: {
+    reason: string;
+    chatId: string;
+    nonce: string;
+    responseText: string | null;
+    chatStatus: number | null;
+    signaturePayload: unknown;
+    attestationPayload: unknown;
+  }) => {
+    const result = unverifiedDecision({ ...shared, ...args });
+    if (result.decision.explanation) params.onDelta?.(result.decision.explanation);
+    params.onStep?.("verifying");
+    return result;
+  };
+  params.onStep?.("thinking");
+  const apiKey = nearAiApiKey();
+  if (!apiKey) {
+    return fallback({
+      reason: "NEAR_AI_CLOUD_API_KEY is not set.",
+      chatId: "",
+      nonce: "",
+      responseText: null,
+      chatStatus: null,
+      signaturePayload: null,
+      attestationPayload: null,
+    });
+  }
+  let chat: { status: number; text: string };
+  try {
+    chat = await fetchChatText(
+      `${nearAiBaseUrl()}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          accept: "text/event-stream, application/json",
+          "content-type": "application/json",
+          "x-no-aliasing": "true",
+        },
+        body: requestBodyStr,
+      },
+      CHAT_TIMEOUT_MS,
+      (text) => {
+        const explanation = partialExplanation(text);
+        if (explanation) params.onDelta?.(explanation);
+      },
+    );
+  } catch (error) {
+    return fallback({
+      reason: `NEAR AI chat failed: ${errorText(error)}`,
+      chatId: "",
+      nonce: "",
+      responseText: null,
+      chatStatus: null,
+      signaturePayload: null,
+      attestationPayload: null,
+    });
+  }
+  if (chat.status < 200 || chat.status >= 300) {
+    return fallback({
+      reason: `NEAR AI chat failed with HTTP ${chat.status}.`,
+      chatId: "",
+      nonce: "",
+      responseText: null,
+      chatStatus: chat.status,
+      signaturePayload: null,
+      attestationPayload: null,
+    });
+  }
+  params.onStep?.("verifying");
+  return attestHardware({
+    ...shared,
+    apiKey,
+    responseText: chat.text,
+    chatStatus: chat.status,
   });
 }
 
@@ -243,39 +275,19 @@ export async function readEnclaveTelemetry(): Promise<EnclaveTelemetry> {
       signing_address: null,
       intel_quote_sha256: null,
       nvidia_payload_sha256: null,
-      detail: "NEAR_AI_CLOUD_API_KEY is not set. Inference will be signed by the local cryptographic enclave.",
+      detail: "NEAR_AI_CLOUD_API_KEY is not set. Local policy can still answer, and attestation stays unverified.",
     };
   }
   const nonce = randomBytes(32).toString("hex");
-  try {
-    const report = await fetchText(
-      `${base}/attestation/report?model=${encodeURIComponent(model)}&nonce=${nonce}`,
-      { method: "GET", headers: authHeaders(key) },
-      ATTESTATION_TIMEOUT_MS,
-    );
-    if (report.status < 200 || report.status >= 300) {
-      throw new Error(`Attestation report returned HTTP ${report.status}`);
-    }
-    const parsed = parseJson(report.text);
-    const intel = extractString(parsed, ["intel_quote", "quote", "tdx_quote", "signed_quote"]) || report.text;
-    const nvidia = extractString(parsed, ["nvidia_payload", "nv_payload", "gpu_evidence"]);
-    const signingAddress = extractString(parsed, ["signing_address", "signingAddress"]);
-    return {
-      provider: "NEAR AI Cloud",
-      cpu_tee: "Intel TDX",
-      gpu_tee: "NVIDIA H100 TEE",
-      signing_algo: "ecdsa",
-      base_url: base,
-      key_configured: true,
-      status: "live",
-      model,
-      nonce,
-      signing_address: signingAddress,
-      intel_quote_sha256: sha256Hex(intel),
-      nvidia_payload_sha256: nvidia ? sha256Hex(nvidia) : null,
-      detail: "Hardware attestation report answered from NEAR AI Cloud.",
-    };
-  } catch (error) {
+  const report = await fetchEvidence(
+    `${base}/attestation/report?model=${encodeURIComponent(model)}&nonce=${nonce}`,
+    key,
+    "attestation",
+  );
+  const entries = collectReportEntries(report.json);
+  const intel = firstQuote(entries, "intel_quote");
+  const nvidia = firstQuote(entries, "nvidia_payload");
+  if (report.error && entries.length === 0) {
     return {
       provider: "NEAR AI Cloud",
       cpu_tee: "Intel TDX",
@@ -289,18 +301,26 @@ export async function readEnclaveTelemetry(): Promise<EnclaveTelemetry> {
       signing_address: null,
       intel_quote_sha256: null,
       nvidia_payload_sha256: null,
-      detail: error instanceof Error ? error.message : "Attestation endpoint is unreachable.",
+      detail: `Attestation endpoint is unreachable: ${report.error}`,
     };
   }
-}
-
-export function verifyEnclaveSignature(requestSha256: string, responseSha256: string, signature: string): boolean {
-  const key = loadEnclaveKey();
-  const verifier = createVerify("SHA256");
-  verifier.update(`${requestSha256}:${responseSha256}`);
-  verifier.end();
-  const bytes = Buffer.from(signature.replace(/^0x/, ""), "hex");
-  return verifier.verify(key.publicKeyPem, bytes);
+  return {
+    provider: "NEAR AI Cloud",
+    cpu_tee: "Intel TDX",
+    gpu_tee: "NVIDIA H100 TEE",
+    signing_algo: "ecdsa",
+    base_url: base,
+    key_configured: true,
+    status: "live",
+    model,
+    nonce,
+    signing_address: entries[0]?.address || null,
+    intel_quote_sha256: intel ? sha256Hex(intel) : null,
+    nvidia_payload_sha256: nvidia ? sha256Hex(nvidia) : null,
+    detail: entries.length > 0
+      ? "Hardware attestation report answered from NEAR AI Cloud."
+      : "NEAR AI Cloud answered, and the report did not include a signing address.",
+  };
 }
 
 function resolveModel(requested?: string): string {
@@ -329,7 +349,7 @@ function buildChatRequest(
   ].join("\n");
   return {
     model,
-    stream: false,
+    stream: true,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
@@ -342,85 +362,78 @@ async function attestHardware(args: {
   apiKey: string;
   model: string;
   request: ChatCompletionRequest;
-  requestBodyStr: string;
   requestSha256: string;
   redaction: RedactionResult | null;
   userMessage: string;
   policyContext: unknown;
   balancesContext: unknown;
+  responseText: string;
+  chatStatus: number;
 }): Promise<AttestedInference> {
-  const chat = await fetchText(
-    `${nearAiBaseUrl()}/chat/completions`,
-    {
-      method: "POST",
-      headers: { ...authHeaders(args.apiKey), "content-type": "application/json" },
-      body: args.requestBodyStr,
-    },
-    CHAT_TIMEOUT_MS,
-  );
-  if (chat.status < 200 || chat.status >= 300) {
-    throw new Error(`NEAR AI chat failed with HTTP ${chat.status}`);
-  }
-  const chatJson = parseJson(chat.text);
-  const chatId = extractString(chatJson, ["id", "chat_id", "chatId"]);
-  if (!chatId) throw new Error("NEAR AI chat response did not include an id.");
-  const responseSha256 = sha256Hex(chat.text);
-  const nonce = randomBytes(32).toString("hex");
-  const [signatureResult, attestationResult] = await Promise.allSettled([
-    fetchText(
-      `${nearAiBaseUrl()}/signature/${encodeURIComponent(chatId)}?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa`,
-      { method: "GET", headers: authHeaders(args.apiKey) },
-      ATTESTATION_TIMEOUT_MS,
-    ),
-    fetchText(
-      `${nearAiBaseUrl()}/attestation/report?model=${encodeURIComponent(args.model)}&nonce=${nonce}`,
-      { method: "GET", headers: authHeaders(args.apiKey) },
-      ATTESTATION_TIMEOUT_MS,
-    ),
-  ]);
-  const signaturePayload = fulfilledJson(signatureResult);
-  const attestationPayload = fulfilledJson(attestationResult);
-  const remoteSignature = extractString(signaturePayload, ["signature", "tee_signature"]);
-  const remoteAddress = extractString(signaturePayload, ["signing_address", "signingAddress", "address"]);
-  const remoteQuote = extractString(attestationPayload, ["intel_quote", "quote", "tdx_quote", "signed_quote"]);
-  const remoteNvidia = extractString(attestationPayload, ["nvidia_payload", "nv_payload", "gpu_evidence"]);
+  const chatJson = interpretChatBody(args.responseText);
   const content = extractAssistantContent(chatJson);
   const parsed = content ? parseModelDecision(content) : null;
-  const decision = resolveDecision(
-    args.userMessage,
-    args.policyContext,
-    args.balancesContext,
-    args.redaction,
-    parsed,
-  );
-  const local = signLocally(args.requestSha256, responseSha256, args.model, nonce);
-  const hardwareSignature = Boolean(remoteSignature && remoteAddress);
-  const hardwareEvidence = Boolean(remoteQuote || remoteNvidia);
-  return {
-    mode: hardwareSignature || hardwareEvidence ? "hardware-tee" : "hardware-chat-local-signature",
-    model: args.model,
-    chatId,
+  const decision = resolveDecision(args.userMessage, args.policyContext, args.balancesContext, args.redaction, parsed);
+  // Hash the raw HTTP body. SSE is assembled only to read the chat id and content.
+  const responseSha256 = sha256Hex(args.responseText);
+  const chatId = extractString(chatJson, ["id", "chat_id", "chatId"]);
+  const nonce = randomBytes(32).toString("hex");
+  if (!chatId) {
+    return packInference({
+      ...args,
+      decision,
+      responseSha256,
+      chatId: "",
+      nonce,
+      signature: "",
+      signing_address: "",
+      intel_quote: "",
+      nvidia_payload: "",
+      verification: { status: "unverified", reason: "NEAR AI chat response did not include an id." },
+      hardware: { chat_status: args.chatStatus, signature: null, attestation: null },
+    });
+  }
+  const base = nearAiBaseUrl();
+  const [signatureResult, attestationResult] = await Promise.all([
+    fetchEvidence(
+      `${base}/signature/${encodeURIComponent(chatId)}?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa`,
+      args.apiKey,
+      "signature",
+    ),
+    fetchEvidence(
+      `${base}/attestation/report?model=${encodeURIComponent(args.model)}&nonce=${nonce}`,
+      args.apiKey,
+      "attestation",
+    ),
+  ]);
+  const checked = verifyCloudEvidence({
     requestSha256: args.requestSha256,
     responseSha256,
-    nonce,
-    signature: remoteSignature || local.signature,
-    signing_address: remoteAddress || local.signing_address,
-    signing_algo: "ecdsa",
-    intel_quote: remoteQuote || local.intel_quote,
-    nvidia_payload: remoteNvidia || local.nvidia_payload,
-    redaction: args.redaction,
+    signatureBody: signatureResult.json,
+    attestationBody: attestationResult.json,
+    signatureError: signatureResult.error,
+    attestationError: attestationResult.error,
+  });
+  return packInference({
+    ...args,
     decision,
-    rawResponseText: chat.text,
-    request: args.request,
+    responseSha256,
+    chatId,
+    nonce,
+    signature: checked.signature,
+    signing_address: checked.signing_address,
+    intel_quote: checked.intel_quote,
+    nvidia_payload: checked.nvidia_payload,
+    verification: checked.verification,
     hardware: {
-      chat_status: chat.status,
-      signature: signaturePayload,
-      attestation: attestationPayload,
+      chat_status: args.chatStatus,
+      signature: signatureResult.json,
+      attestation: attestationResult.json,
     },
-  };
+  });
 }
 
-function attestLocally(args: {
+function unverifiedDecision(args: {
   model: string;
   request: ChatCompletionRequest;
   requestSha256: string;
@@ -428,31 +441,72 @@ function attestLocally(args: {
   userMessage: string;
   policyContext: unknown;
   balancesContext: unknown;
-  mode: AttestationMode;
-  hardware: AttestedInference["hardware"];
+  reason: string;
+  chatId: string;
+  nonce: string;
   responseText: string | null;
-  chatId: string | null;
+  chatStatus: number | null;
+  signaturePayload: unknown;
+  attestationPayload: unknown;
 }): AttestedInference {
   const decision = decideLocally(args.userMessage, args.policyContext, args.balancesContext, args.redaction);
   const responseText = args.responseText ?? JSON.stringify(decision);
-  const responseSha256 = sha256Hex(responseText);
-  const signed = signLocally(args.requestSha256, responseSha256, args.model);
-  return {
-    mode: args.mode,
+  return packInference({
     model: args.model,
-    chatId: args.chatId ?? `chatcmpl-local-${responseSha256.slice(0, 24)}`,
+    request: args.request,
     requestSha256: args.requestSha256,
-    responseSha256,
-    nonce: signed.nonce,
-    signature: signed.signature,
-    signing_address: signed.signing_address,
-    signing_algo: "ecdsa",
-    intel_quote: signed.intel_quote,
-    nvidia_payload: signed.nvidia_payload,
     redaction: args.redaction,
     decision,
     rawResponseText: responseText,
+    responseSha256: sha256Hex(responseText),
+    chatId: args.chatId,
+    nonce: args.nonce,
+    signature: "",
+    signing_address: "",
+    intel_quote: "",
+    nvidia_payload: "",
+    verification: { status: "unverified", reason: args.reason },
+    hardware:
+      args.chatStatus == null && args.signaturePayload == null && args.attestationPayload == null
+        ? null
+        : { chat_status: args.chatStatus, signature: args.signaturePayload, attestation: args.attestationPayload },
+  });
+}
+
+function packInference(args: {
+  model: string;
+  request: ChatCompletionRequest;
+  requestSha256: string;
+  redaction: RedactionResult | null;
+  decision: CopilotDecision;
+  rawResponseText: string;
+  responseSha256: string;
+  chatId: string;
+  nonce: string;
+  signature: string;
+  signing_address: string;
+  intel_quote: string;
+  nvidia_payload: string;
+  verification: TeeVerification;
+  hardware: AttestedInference["hardware"];
+}): AttestedInference {
+  return {
+    mode: args.verification.status === "verified" ? "hardware-tee" : "unverified",
+    model: args.model,
+    chatId: args.chatId,
+    requestSha256: args.requestSha256,
+    responseSha256: args.responseSha256,
+    nonce: args.nonce,
+    signature: args.signature,
+    signing_address: args.signing_address,
+    signing_algo: "ecdsa",
+    intel_quote: args.intel_quote,
+    nvidia_payload: args.nvidia_payload,
+    redaction: args.redaction,
+    decision: args.decision,
+    rawResponseText: args.rawResponseText,
     request: args.request,
+    verification: args.verification,
     hardware: args.hardware,
   };
 }
@@ -718,10 +772,10 @@ function explainIntent(intent: AegisIntent, preview: DryRunPreview, status: Poli
     return `Swap ${intent.amount} ${origin} to ${destination} on ${preview.quote.shard}. Expected output is ${preview.quote.expectedAmountOut} ${destination} after a $${preview.quote.feeUsd.toFixed(2)} solver fee, with ${preview.quote.slippageBps} bps maximum slippage. ${statusLine(status, preview)}${assumption}`;
   }
   if (intent.action === "shield") {
-    return `Shield ${intent.amount} ${origin} from intents.near into the confidential intents.far shard. The move stays inside the agent account and does not increase today's $${preview.budgetImpact.currentSpentUsd.toFixed(2)} outflow.${assumption}`;
+    return `Shield ${intent.amount} ${origin} from intents.near into the confidential intents.far shard. ${statusLine(status, preview)}${assumption}`;
   }
   if (intent.action === "unshield") {
-    return `Unshield ${intent.amount} ${origin} from intents.far back to the public intents.near balance.${assumption}`;
+    return `Unshield ${intent.amount} ${origin} from intents.far back to the public intents.near balance. ${statusLine(status, preview)}${assumption}`;
   }
   if (intent.action === "transfer") {
     const who = intent.recipient === "[REDACTED_EMAIL]" ? "the redacted recipient" : intent.recipient;
@@ -735,10 +789,7 @@ function statusLine(status: PolicyStatus, preview: DryRunPreview): string {
   return `Daily spend would move from $${preview.budgetImpact.currentSpentUsd.toFixed(2)} to $${preview.budgetImpact.projectedSpentUsd.toFixed(2)} of the $${preview.budgetImpact.dailyLimitUsd.toFixed(2)} budget.`;
 }
 
-function passReason(intent: AegisIntent, preview: DryRunPreview): string {
-  if (intent.action === "shield" || intent.action === "unshield") {
-    return "Within owner policy. A confidential shard move does not count as daily outflow.";
-  }
+function passReason(_intent: AegisIntent, preview: DryRunPreview): string {
   return `Within owner policy. Projected daily spend is $${preview.budgetImpact.projectedSpentUsd.toFixed(2)} of $${preview.budgetImpact.dailyLimitUsd.toFixed(2)}.`;
 }
 
@@ -793,274 +844,6 @@ function normalizeModelIntent(value: unknown): CopilotIntent | null {
   };
 }
 
-function signLocally(requestSha256: string, responseSha256: string, model: string, nonceHex?: string): {
-  signature: string;
-  signing_address: string;
-  intel_quote: string;
-  nvidia_payload: string;
-  nonce: string;
-} {
-  const key = loadEnclaveKey();
-  const binding = `${requestSha256}:${responseSha256}`;
-  const nonce = nonceHex && /^[0-9a-fA-F]{64}$/.test(nonceHex) ? nonceHex.toLowerCase() : sha256Hex(binding);
-  const signature = signMessage(key.privateKeyPem, binding);
-  const measurement = sha256Hex(`kotha-tee:${model}`);
-  return {
-    signature,
-    signing_address: key.signingAddress,
-    nonce,
-    intel_quote: buildIntelQuote({ key, nonce, requestSha256, responseSha256, measurement, signature }),
-    nvidia_payload: buildNvidiaPayload({ key, nonce, requestSha256, responseSha256, measurement }),
-  };
-}
-
-function buildIntelQuote(args: {
-  key: EnclaveKey;
-  nonce: string;
-  requestSha256: string;
-  responseSha256: string;
-  measurement: string;
-  signature: string;
-}): string {
-  const reportData = createHash("sha256").update(`${args.requestSha256}:${args.responseSha256}`).digest();
-  const header = Buffer.alloc(24);
-  header.write("KOTHA-TDX-QUOTE1", 0, "ascii");
-  header.writeUInt16LE(1, 16);
-  header.writeUInt16LE(1, 18);
-  header.writeUInt16LE(args.key.curve === "secp256k1" ? 1 : 2, 20);
-  const signature = Buffer.from(args.signature.replace(/^0x/, ""), "hex");
-  const spki = createPublicKey(args.key.publicKeyPem).export({ type: "spki", format: "der" });
-  const signatureLen = Buffer.alloc(4);
-  signatureLen.writeUInt32LE(signature.length, 0);
-  const spkiLen = Buffer.alloc(4);
-  spkiLen.writeUInt32LE(spki.length, 0);
-  return Buffer.concat([
-    header,
-    Buffer.from(args.nonce, "hex"),
-    reportData,
-    Buffer.from(args.measurement, "hex"),
-    signatureLen,
-    signature,
-    spkiLen,
-    spki,
-  ]).toString("base64");
-}
-
-function buildNvidiaPayload(args: {
-  key: EnclaveKey;
-  nonce: string;
-  requestSha256: string;
-  responseSha256: string;
-  measurement: string;
-}): string {
-  const evidence = {
-    version: "kotha-nvidia-cc-evidence-v1",
-    gpu_tee: "NVIDIA H100 TEE",
-    hwmodel: "H100-SXM-80GB",
-    attester: "kotha-local-cryptographic-enclave",
-    nonce: args.nonce,
-    evidence: {
-      request_sha256: args.requestSha256,
-      response_sha256: args.responseSha256,
-      measurement_sha256: args.measurement,
-    },
-    signing_address: args.key.signingAddress,
-    signing_algo: "ecdsa-sha256",
-  };
-  const signature = signMessage(args.key.privateKeyPem, JSON.stringify(evidence));
-  return Buffer.from(JSON.stringify({ ...evidence, signature }), "utf8").toString("base64");
-}
-
-function loadEnclaveKey(): EnclaveKey {
-  if (cachedKey) return cachedKey;
-  const file = aegisStatePath(KEY_FILE);
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as EnclaveKey;
-    if (parsed.privateKeyPem && parsed.publicKeyPem && parsed.signingAddress) {
-      cachedKey = parsed;
-      return parsed;
-    }
-  } catch {
-    // Create the enclave key below.
-  }
-  const curve = tryCurve();
-  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: curve });
-  const record: EnclaveKey = {
-    curve,
-    privateKeyPem: exportPem(privateKey, "pkcs8"),
-    publicKeyPem: exportPem(publicKey, "spki"),
-    signingAddress: addressFromSpki(exportPem(publicKey, "spki")),
-  };
-  writeJsonFile(file, record);
-  cachedKey = record;
-  return record;
-}
-
-function tryCurve(): "secp256k1" | "prime256v1" {
-  try {
-    generateKeyPairSync("ec", { namedCurve: "secp256k1" });
-    return "secp256k1";
-  } catch {
-    return "prime256v1";
-  }
-}
-
-function exportPem(key: KeyObject, type: "pkcs8" | "spki"): string {
-  return key.export({ type, format: "pem" }).toString();
-}
-
-function addressFromSpki(publicKeyPem: string): string {
-  const der = createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
-  return `0x${createHash("sha256").update(der).digest("hex").slice(-40)}`;
-}
-
-function signMessage(privateKeyPem: string, message: string): string {
-  const signer = createSign("SHA256");
-  signer.update(message);
-  signer.end();
-  return `0x${signer.sign(privateKeyPem).toString("hex")}`;
-}
-
-function redactDeterministic(input: string): { text: string; count: number; types: PiiType[] } {
-  let text = input;
-  let count = 0;
-  const types: PiiType[] = [];
-  const seed = redactSeedPhrases(text);
-  text = seed.text;
-  count += seed.count;
-  if (seed.count > 0) types.push("seed_phrase");
-  const email = replaceCount(text, /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
-  text = email.text;
-  count += email.count;
-  if (email.count > 0) types.push("email");
-  const apiKeyPatterns = [
-    /\bnaa_[A-Za-z0-9_-]{8,}\b/g,
-    /\bngt_[A-Za-z0-9_-]{8,}\b/g,
-    /\bsk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{12,}\b/g,
-    /\bxai-[A-Za-z0-9_-]{12,}\b/g,
-    /\bgh[pousr]_[A-Za-z0-9]{20,}\b/gi,
-    /\bAKIA[0-9A-Z]{16}\b/g,
-    /\b(?:api[_-]?key|apikey|access[_-]?token)\s*[:=]\s*['"]?[A-Za-z0-9_\-./+]{12,}['"]?/gi,
-  ];
-  let apiCount = 0;
-  for (const pattern of apiKeyPatterns) {
-    const replaced = replaceCount(text, pattern, "[REDACTED_API_KEY]");
-    text = replaced.text;
-    apiCount += replaced.count;
-  }
-  count += apiCount;
-  if (apiCount > 0) types.push("api_key");
-  const phonePatterns = [
-    /\+\d{1,3}(?:[\s.-]?\d){7,14}\b/g,
-    /\(\d{3}\)\s*\d{3}[-.\s]?\d{4}\b/g,
-    /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/g,
-  ];
-  let phoneCount = 0;
-  for (const pattern of phonePatterns) {
-    const replaced = replaceCount(text, pattern, "[REDACTED_PHONE]");
-    text = replaced.text;
-    phoneCount += replaced.count;
-  }
-  count += phoneCount;
-  if (phoneCount > 0) types.push("phone");
-  return { text, count, types };
-}
-
-function redactSeedPhrases(input: string): { text: string; count: number } {
-  let count = 0;
-  const labeled =
-    /((?:seed\s+phrase|mnemonic(?:\s+phrase)?|recovery\s+phrase|secret\s+recovery\s+phrase|wallet\s+seed)\s*[:#-]?\s*)((?:[a-z]+(?:\s+|$)){12,24})/gi;
-  let text = input.replace(labeled, (_match, label: string) => {
-    count += 1;
-    return `${label}[REDACTED_SEED_PHRASE] `;
-  });
-  const matches = [...text.matchAll(/[A-Za-z]+/g)];
-  const cuts: Array<{ start: number; end: number }> = [];
-  let cursor = 0;
-  while (cursor < matches.length) {
-    const word = matches[cursor];
-    if (!word || !BIP39.has(word[0].toLowerCase())) {
-      cursor += 1;
-      continue;
-    }
-    let end = cursor;
-    while (end < matches.length) {
-      const current = matches[end];
-      if (!current || !BIP39.has(current[0].toLowerCase())) break;
-      if (end > cursor) {
-        const previous = matches[end - 1];
-        if (!previous) break;
-        const gap = text.slice((previous.index ?? 0) + previous[0].length, current.index ?? 0);
-        if (!/^\s+$/.test(gap)) break;
-      }
-      end += 1;
-    }
-    const length = end - cursor;
-    if ((length === 12 || length === 24) && matches[cursor] && matches[end - 1]) {
-      const first = matches[cursor];
-      const last = matches[end - 1];
-      cuts.push({ start: first.index ?? 0, end: (last.index ?? 0) + last[0].length });
-      count += 1;
-    }
-    cursor = Math.max(end, cursor + 1);
-  }
-  for (const cut of cuts.reverse()) {
-    text = `${text.slice(0, cut.start)}[REDACTED_SEED_PHRASE]${text.slice(cut.end)}`;
-  }
-  return { text, count };
-}
-
-function replaceCount(text: string, pattern: RegExp, token: string): { text: string; count: number } {
-  let count = 0;
-  const next = text.replace(pattern, () => {
-    count += 1;
-    return token;
-  });
-  return { text: next, count };
-}
-
-async function callPrivacyFilter(
-  text: string,
-  apiKey: string,
-): Promise<{ text?: string; types: PiiType[]; count?: number }> {
-  const response = await fetchText(
-    `${nearAiBaseUrl()}/privacy/redact`,
-    {
-      method: "POST",
-      headers: { ...authHeaders(apiKey), "content-type": "application/json" },
-      body: JSON.stringify({ model: "openai/privacy-filter", input: text }),
-    },
-    ATTESTATION_TIMEOUT_MS,
-  );
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Privacy filter returned HTTP ${response.status}`);
-  }
-  const parsed = parseJson(response.text);
-  const record = asRecord(parsed);
-  const redacted =
-    extractString(parsed, ["redacted", "redacted_text", "output", "text", "result"]) ||
-    extractAssistantContent(parsed);
-  const types = new Set<PiiType>();
-  const entities = record?.entities ?? record?.pii_types ?? record?.findings;
-  if (Array.isArray(entities)) {
-    for (const entity of entities) {
-      const name = typeof entity === "string" ? entity : stringValue(asRecord(entity)?.type);
-      const mapped = mapPiiType(name);
-      if (mapped) types.add(mapped);
-    }
-  }
-  return { text: redacted || undefined, types: [...types], count: Array.isArray(entities) ? entities.length : undefined };
-}
-
-function mapPiiType(value: string): PiiType | null {
-  const name = value.toLowerCase();
-  if (name.includes("email")) return "email";
-  if (name.includes("phone")) return "phone";
-  if (name.includes("api") || name.includes("key") || name.includes("secret")) return "api_key";
-  if (name.includes("seed") || name.includes("mnemonic")) return "seed_phrase";
-  return null;
-}
-
 function authHeaders(apiKey: string): Record<string, string> {
   return { authorization: `Bearer ${apiKey}`, accept: "application/json" };
 }
@@ -1070,10 +853,269 @@ async function fetchText(url: string, init: RequestInit, timeoutMs: number): Pro
   return { status: response.status, text: await response.text() };
 }
 
-function fulfilledJson(result: PromiseSettledResult<{ status: number; text: string }>): unknown {
-  if (result.status !== "fulfilled") return null;
-  if (result.value.status < 200 || result.value.status >= 300) return null;
-  return parseJson(result.value.text) ?? result.value.text;
+async function fetchChatText(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  onText?: (text: string) => void,
+): Promise<{ status: number; text: string }> {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await response.text();
+    if (text) onText?.(text);
+    return { status: response.status, text };
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    text += decoder.decode(chunk.value, { stream: true });
+    onText?.(text);
+  }
+  text += decoder.decode();
+  if (text) onText?.(text);
+  return { status: response.status, text };
+}
+
+async function fetchEvidence(
+  url: string,
+  apiKey: string,
+  kind: "signature" | "attestation",
+): Promise<{ json: unknown; error: string | null }> {
+  let last = "request failed";
+  for (let attempt = 0; attempt <= EVIDENCE_RETRIES; attempt += 1) {
+    try {
+      const response = await fetchText(url, { method: "GET", headers: authHeaders(apiKey) }, EVIDENCE_TIMEOUT_MS);
+      const parsed = parseJson(response.text);
+      if (response.status < 200 || response.status >= 300) {
+        last = `HTTP ${response.status}`;
+        continue;
+      }
+      const transport = evidenceTransportError(parsed, kind);
+      if (transport) {
+        last = transport;
+        continue;
+      }
+      return { json: parsed, error: null };
+    } catch (error) {
+      last = errorText(error);
+    }
+  }
+  return { json: null, error: last };
+}
+
+function evidenceTransportError(parsed: unknown, kind: "signature" | "attestation"): string | null {
+  if (parsed == null) return "response was not JSON";
+  const record = asRecord(parsed);
+  if (!record) return "response was not JSON";
+  if (kind === "signature") {
+    if (stringField(record, ["signature"])) return null;
+    return errorMessage(record) || "signature endpoint did not return a signature";
+  }
+  if (collectReportEntries(parsed).length > 0) return null;
+  const message = errorMessage(record);
+  if (record.error_code != null || record.error != null) return message || "attestation report returned an error";
+  return null;
+}
+
+function errorMessage(record: Record<string, unknown>): string {
+  const nested = asRecord(record.error);
+  return stringValue(record.message) || stringValue(nested?.message) || stringValue(record.error);
+}
+
+function errorText(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") return "timed out after 60s";
+    return error.message;
+  }
+  return "request failed";
+}
+
+function verifyCloudEvidence(args: {
+  requestSha256: string;
+  responseSha256: string;
+  signatureBody: unknown;
+  attestationBody: unknown;
+  signatureError: string | null;
+  attestationError: string | null;
+}): {
+  verification: TeeVerification;
+  signature: string;
+  signing_address: string;
+  intel_quote: string;
+  nvidia_payload: string;
+} {
+  const signatureRecord = asRecord(args.signatureBody);
+  const signature = signatureRecord ? stringField(signatureRecord, ["signature"]) : "";
+  const signedText = signatureRecord ? stringField(signatureRecord, ["text"]) : "";
+  const entries = collectReportEntries(args.attestationBody);
+  const intel = firstQuote(entries, "intel_quote");
+  const nvidia = firstQuote(entries, "nvidia_payload");
+  const fallbackAddress = entries[0]?.address || (signatureRecord ? stringField(signatureRecord, ["signing_address", "signingAddress"]) : "");
+  const fail = (reason: string) => ({
+    verification: { status: "unverified" as const, reason },
+    signature,
+    signing_address: fallbackAddress,
+    intel_quote: intel,
+    nvidia_payload: nvidia,
+  });
+  if (!signature) {
+    const detail = args.signatureError ? ` (${args.signatureError})` : "";
+    return fail(`signature endpoint did not return a signature${detail}`);
+  }
+  if (entries.length === 0) {
+    const detail = args.attestationError ? ` (${args.attestationError})` : "";
+    return fail(`attestation report did not include a signing_address${detail}`);
+  }
+  const reportedAlgo = signatureRecord ? stringField(signatureRecord, ["signing_algo", "signingAlgo"]).toLowerCase() : "";
+  if (reportedAlgo && reportedAlgo !== "ecdsa") {
+    return fail(`signature signing_algo is ${reportedAlgo}, not ecdsa`);
+  }
+  const parsedText = parseSignedText(signedText);
+  if (!parsedText) return fail("signed text did not include a response hash");
+  if (parsedText.responseHash !== args.responseSha256.toLowerCase()) {
+    return fail("response hash does not match the signed payload");
+  }
+  if (parsedText.requestHash && parsedText.requestHash !== args.requestSha256.toLowerCase()) {
+    return fail("request hash does not match the chat request");
+  }
+  const kind = signatureRecord ? stringField(signatureRecord, ["signature_kind", "signatureKind"]) : "";
+  const selected = selectReportEntries(entries, kind);
+  if (selected.length === 0) return fail("attestation report did not include a signing_address");
+  const ecdsaEntries = selected.filter((entry) => !entry.algo || entry.algo.toLowerCase() === "ecdsa");
+  if (ecdsaEntries.length === 0) {
+    return fail(`attestation report signing_algo is ${selected[0]?.algo || "unknown"}, not ecdsa`);
+  }
+  const recovered = recoverPersonalSignAddress(signature, signedText);
+  const match = recovered ? ecdsaEntries.find((entry) => sameAddress(entry.address, recovered)) : undefined;
+  if (!match) {
+    return fail("ECDSA signature did not recover to a signing_address in the attestation report");
+  }
+  return {
+    verification: {
+      status: "verified",
+      reason: "Signature recovered to the attestation signing address and the response hash matches.",
+    },
+    signature,
+    signing_address: match.address,
+    intel_quote: match.intel_quote || intel,
+    nvidia_payload: match.nvidia_payload || nvidia,
+  };
+}
+
+function selectReportEntries(entries: ReportEntry[], kind: string): ReportEntry[] {
+  if (kind === "provider_tee") return entries.filter((entry) => entry.source === "model" || entry.source === "other");
+  if (kind === "gateway") return entries.filter((entry) => entry.source === "gateway" || entry.source === "other");
+  return entries;
+}
+
+function parseSignedText(text: string): { requestHash: string | null; responseHash: string } | null {
+  const parts = text.split(":");
+  if (parts.length < 2) return null;
+  const responseHash = parts[parts.length - 1]?.toLowerCase() ?? "";
+  if (!/^[0-9a-f]{64}$/.test(responseHash)) return null;
+  const requestCandidate = parts[parts.length - 2]?.toLowerCase() ?? "";
+  const requestHash = /^[0-9a-f]{64}$/.test(requestCandidate) ? requestCandidate : null;
+  return { requestHash, responseHash };
+}
+
+function collectReportEntries(value: unknown): ReportEntry[] {
+  const entries: ReportEntry[] = [];
+  walkReport(value, "other", entries, 0);
+  return entries;
+}
+
+function walkReport(value: unknown, source: ReportEntry["source"], entries: ReportEntry[], depth: number): void {
+  if (depth > 8 || value == null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) walkReport(item, source, entries, depth + 1);
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  const address = stringField(record, ["signing_address", "signingAddress"]);
+  if (address) {
+    entries.push({
+      address,
+      algo: stringField(record, ["signing_algo", "signingAlgo"]),
+      intel_quote: stringField(record, ["intel_quote", "quote", "tdx_quote", "signed_quote"]),
+      nvidia_payload: stringField(record, ["nvidia_payload", "nv_payload", "gpu_evidence"]),
+      source,
+    });
+  }
+  for (const [key, child] of Object.entries(record)) {
+    const next = key === "model_attestations" ? "model" : key === "gateway_attestation" ? "gateway" : source;
+    walkReport(child, next, entries, depth + 1);
+  }
+}
+
+function firstQuote(entries: ReportEntry[], field: "intel_quote" | "nvidia_payload"): string {
+  return entries.find((entry) => entry[field].length > 0)?.[field] ?? "";
+}
+
+function recoverPersonalSignAddress(signatureHex: string, text: string): string | null {
+  const raw = hexToBytes(signatureHex);
+  if (!raw || (raw.length !== 65 && raw.length !== 64)) return null;
+  const prefix = `\x19Ethereum Signed Message:\n${new TextEncoder().encode(text).length}`;
+  const hash = keccak_256(new TextEncoder().encode(`${prefix}${text}`));
+  // Ethereum personal_sign stores recovery at the last byte. noble expects it first.
+  const body = raw.length === 65 ? raw.subarray(0, 64) : raw;
+  const recoveryIds = raw.length === 65 ? [normalizeRecoveryId(raw[64])] : [0, 1];
+  for (const recoveryId of recoveryIds) {
+    if (recoveryId == null) continue;
+    const nobleSig = new Uint8Array(65);
+    nobleSig[0] = recoveryId;
+    nobleSig.set(body, 1);
+    try {
+      const compressed = secp256k1.recoverPublicKey(nobleSig, hash, { prehash: false });
+      const uncompressed = secp256k1.Point.fromBytes(compressed).toBytes(false);
+      if (uncompressed.length !== 65 || uncompressed[0] !== 0x04) continue;
+      const digest = keccak_256(uncompressed.subarray(1));
+      return `0x${bytesToHex(digest.subarray(digest.length - 20))}`;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function normalizeRecoveryId(value: number): number | null {
+  let id = value;
+  if (id >= 27 && id <= 30) id -= 27;
+  if (id === 0 || id === 1 || id === 2 || id === 3) return id;
+  return null;
+}
+
+function sameAddress(left: string, right: string): boolean {
+  const a = left.trim().toLowerCase().replace(/^0x/, "");
+  const b = right.trim().toLowerCase().replace(/^0x/, "");
+  return /^[0-9a-f]{40}$/.test(a) && a === b;
+}
+
+function hexToBytes(value: string): Uint8Array | null {
+  const hex = value.trim().replace(/^0x/i, "");
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+  const out = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
+}
+
+function stringField(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const found = record[key];
+    if (typeof found === "string" && found.trim()) return found.trim();
+  }
+  return "";
 }
 
 function extractAssistantContent(value: unknown): string {

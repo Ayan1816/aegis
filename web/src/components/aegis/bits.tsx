@@ -52,7 +52,7 @@ export function CopyButton({
         });
       }}
       className={cn(
-        "inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white/75 hover:border-[#00EC97]/40 hover:text-[#00EC97]",
+        "inline-flex max-w-full items-center gap-1 whitespace-normal break-words rounded-md border border-white/10 bg-white/5 px-2 py-1 text-left font-mono text-[10px] leading-snug text-white/75 hover:border-[#00EC97]/40 hover:text-[#00EC97]",
         className,
       )}
     >
@@ -72,12 +72,12 @@ export function HashRow({
   lang: Lang;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-1 border-t border-white/8 py-2 sm:grid-cols-[minmax(0,9.5rem)_1fr_auto] sm:items-center">
-      <span className="text-[10px] uppercase tracking-[0.16em] text-white/45">{label}</span>
-      <code className="truncate font-mono text-[11px] text-[#d9ffe8]" title={value}>
-        {shortHash(value, 18, 12)}
+    <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 border-t border-white/8 py-2">
+      <span className="w-full min-w-0 text-[10px] uppercase tracking-[0.12em] text-white/45 min-[376px]:w-28 min-[376px]:shrink-0">{label}</span>
+      <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-[#d9ffe8] min-[376px]:truncate" title={value}>
+        {shortHash(value, 10, 8)}
       </code>
-      <CopyButton value={value} lang={lang} />
+      <CopyButton className="shrink-0" value={value} lang={lang} />
     </div>
   );
 }

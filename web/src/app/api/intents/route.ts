@@ -11,11 +11,15 @@ import {
   type TeeProofInput,
 } from "@/lib/intents-agent";
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
+import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
+import type { AegisIntent } from "@/lib/dashboard-types";
+import { isPlausibleTxHash, requiresOwnerProof } from "@/lib/wallet-proof";
+import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ACTIONS = ["dry_run", "execute", "update_policy", "rotate_grant", "revoke_grant", "emergency_freeze"] as const;
+const ACTIONS = ["dry_run", "execute", "update_policy", "rotate_grant", "revoke_grant", "emergency_freeze", "save_tx"] as const;
 type IntentRouteAction = (typeof ACTIONS)[number];
 
 export async function GET() {
@@ -31,7 +35,7 @@ export async function GET() {
       tokens: catalog.tokens,
       agentState,
       vaultInfo,
-      executions,
+      executions: await overlayReceiptRows(executions),
     });
   } catch (error) {
     return errorResponse(error);
@@ -52,11 +56,21 @@ export async function POST(request: Request) {
   const type = record.type;
   if (!isAction(type)) {
     return NextResponse.json(
-      { error: { code: "invalid_action", message: "type must be dry_run, execute, update_policy, rotate_grant, revoke_grant, or emergency_freeze." } },
+      { error: { code: "invalid_action", message: "type must be dry_run, execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, or save_tx." } },
       { status: 400 },
     );
   }
   const payload = asRecord(record.payload) ?? {};
+  if (requiresOwnerProof(type)) {
+    try {
+      await requireOwnerProof({ proof: record.wallet, action: type, payload });
+    } catch (error) {
+      if (error instanceof WalletAuthError) {
+        return NextResponse.json({ error: { code: error.code, message: error.message } }, { status: 401 });
+      }
+      return NextResponse.json({ error: { code: "proof_invalid", message: "Wallet proof was rejected." } }, { status: 401 });
+    }
+  }
   try {
     if (type === "dry_run") {
       const preview = await runDryRunPreview(payload.intent);
@@ -66,7 +80,20 @@ export async function POST(request: Request) {
       const tee = (asRecord(payload.teeAttestation) ?? asRecord(payload.attestation) ?? {}) as TeeProofInput;
       const execution = await executeIntentWithGrant(payload.intent, tee);
       const vault = await recordVerifiedExecution(toVaultRecord(execution));
-      return NextResponse.json({ type, execution, vault });
+      const anchored = await anchorExecutionReceipt(execution, asIntent(payload.intent), { skipChain: true });
+      return NextResponse.json({ type, execution, vault: { ...vault, tx_hash: anchored.txHash, receipt_hash: anchored.receiptHash, chain_error: anchored.chainError } });
+    }
+    if (type === "save_tx") {
+      const id = typeof payload.id === "string" ? payload.id.trim() : "";
+      const txHash = typeof payload.tx_hash === "string" ? payload.tx_hash.trim() : "";
+      if (!id || id.length > 200 || !isPlausibleTxHash(txHash)) {
+        return NextResponse.json({ error: { code: "invalid_tx", message: "Receipt id and transaction hash are required." } }, { status: 400 });
+      }
+      const saved = await saveReceiptTxHash(id, txHash);
+      if (!saved) {
+        return NextResponse.json({ error: { code: "receipt_not_found", message: "No frozen receipt is stored for that id." } }, { status: 404 });
+      }
+      return NextResponse.json({ type, id, tx_hash: txHash });
     }
     if (type === "update_policy") {
       const policy = await updateOwnerPolicy(payload.policy ?? payload);
@@ -132,6 +159,22 @@ function errorResponse(error: unknown) {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   return null;
+}
+
+function asIntent(value: unknown): AegisIntent | null {
+  const record = asRecord(value);
+  if (!record || typeof record.action !== "string" || typeof record.origin_asset !== "string") return null;
+  return {
+    action: record.action as AegisIntent["action"],
+    origin_asset: String(record.origin_asset),
+    destination_asset: String(record.destination_asset || record.origin_asset),
+    amount: String(record.amount ?? ""),
+    amount_usd_estimate: typeof record.amount_usd_estimate === "number" ? record.amount_usd_estimate : 0,
+    max_slippage_bps: typeof record.max_slippage_bps === "number" ? record.max_slippage_bps : 0,
+    recipient: String(record.recipient ?? ""),
+    chain: String(record.chain ?? "near"),
+    confidential: Boolean(record.confidential),
+  };
 }
 
 function isAction(value: unknown): value is IntentRouteAction {

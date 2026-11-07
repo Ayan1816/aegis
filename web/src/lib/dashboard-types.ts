@@ -17,7 +17,12 @@ export const INTENT_ACTIONS = ["swap", "transfer", "withdraw", "shield", "unshie
 export type IntentAction = (typeof INTENT_ACTIONS)[number];
 
 export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED";
-export type AttestationMode = "hardware-tee" | "hardware-chat-local-signature" | "local-enclave-fallback";
+export type AttestationMode = "hardware-tee" | "unverified";
+
+export type TeeVerification = {
+  status: "verified" | "unverified";
+  reason: string;
+};
 export type ShardId = "intents.near" | "intents.far";
 
 export type ActivePolicy = {
@@ -102,10 +107,11 @@ export type AttestedInference = {
   rawResponseText: string;
   request: {
     model: string;
-    stream: false;
+    stream: true;
     response_format: { type: "json_object" };
     messages: Array<{ role: "system" | "user"; content: string }>;
   };
+  verification: TeeVerification;
   hardware: {
     chat_status: number | null;
     signature: unknown;
@@ -213,6 +219,8 @@ export type VerifiedExecution = {
   response_sha256: string;
   tee_signature: string;
   timestamp_ns: string;
+  tx_hash?: string;
+  receipt_hash?: string;
 };
 
 export type VaultInfo = {
@@ -302,6 +310,9 @@ export type ExecuteResponse = {
   vault: {
     execution: VerifiedExecution;
     commands: { record_execution: string; get_execution: string };
+    tx_hash: string | null;
+    receipt_hash: string;
+    chain_error: string | null;
   };
 };
 

@@ -24,6 +24,8 @@ import {
 } from "crypto";
 import fs from "fs";
 import { aegisStatePath, writeJsonFile } from "./aegis-paths";
+import { projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
+import { listReceiptRecords } from "./receipt-store";
 
 export const AGENT_ID = "agent-kotha-prime.near";
 export const OWNER_ACCOUNT = "owner.kotha.testnet";
@@ -188,6 +190,7 @@ export type TeeProofInput = {
   signing_address?: string;
   tee_signing_address?: string;
   signingAddress?: string;
+  verificationStatus?: string;
 };
 
 export type ExecutionResult = {
@@ -373,7 +376,7 @@ function createDefaultState(): PersistedState {
 export function defaultPolicy(): ActivePolicy {
   return {
     dailyBudgetUsd: 100,
-    spentTodayUsd: 15,
+    spentTodayUsd: 0,
     perTxCapUsd: 50,
     allowedActions: [...INTENT_ACTIONS],
     allowedAssets: KOTHA_ASSETS.map((asset) => asset.asset_id),
@@ -518,9 +521,8 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
   const priceIn = balances.prices[origin.asset_id] ?? origin.price;
   const priceOut = balances.prices[destination.asset_id] ?? destination.price;
   const notional = resolveNotional(intent, origin, priceIn);
-  const txUsd = round2(notional.usd);
-  const countsAsSpend = intent.action === "swap" || intent.action === "transfer" || intent.action === "withdraw";
-  const projected = round2(policy.spentTodayUsd + (countsAsSpend ? txUsd : 0));
+  const spend = projectSpend(policy.spentTodayUsd, notional.usd);
+  const { currentSpentUsd, txUsd, projectedSpentUsd: projected } = spend;
   const daily = policy.dailyBudgetUsd;
   const utilizationPct = daily > 0 ? round1((projected / daily) * 100) : 0;
   const slippageBps =
@@ -574,7 +576,7 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
   }
   if (notional.atomic <= BigInt(0)) {
     allowed = false;
-    warnings.push("Amount must be greater than zero.");
+    warnings.push(ZERO_AMOUNT_WARNING);
   }
 
   const spendShard: "public" | "confidential" =
@@ -592,13 +594,13 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
       `PROHORI_PER_TX_LIMIT_EXCEEDED: this ${intent.action} is $${txUsd.toFixed(2)} and the on-chain per-transaction cap is $${policy.perTxCapUsd.toFixed(2)}.`,
     );
   }
-  if (countsAsSpend && projected > daily + 1e-9) {
+  if (projected > daily + 1e-9) {
     allowed = false;
     warnings.push(
-      `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${policy.spentTodayUsd.toFixed(2)}, this ${intent.action} is $${txUsd.toFixed(2)}, projected $${projected.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
+      `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${currentSpentUsd.toFixed(2)}, this ${intent.action} is $${txUsd.toFixed(2)}, projected $${projected.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
     );
   }
-  if (allowed && countsAsSpend && daily > 0 && projected / daily >= 0.8) {
+  if (allowed && daily > 0 && projected / daily >= 0.8) {
     warnings.push(
       `Daily budget utilization would reach ${utilizationPct.toFixed(1)}% ($${projected.toFixed(2)} of $${daily.toFixed(2)}).`,
     );
@@ -615,7 +617,7 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
       shard: quoteShard,
     },
     budgetImpact: {
-      currentSpentUsd: round2(policy.spentTodayUsd),
+      currentSpentUsd,
       txUsd,
       projectedSpentUsd: projected,
       dailyLimitUsd: round2(daily),
@@ -656,6 +658,7 @@ export async function getAgentState(): Promise<AgentStateView> {
   return withState(async (state) => {
     ensureBudgetWindow(state);
     const source = await hydrateRemote(state);
+    await syncSpentFromReceipts(state);
     saveState(state);
     return toView(state, source);
   });
@@ -671,6 +674,7 @@ export async function updateOwnerPolicy(partialPolicy: PolicyPatch | unknown): P
   return withState(async (state) => {
     ensureBudgetWindow(state);
     state.policy = { ...state.policy, ...patch };
+    await syncSpentFromReceipts(state);
     state.policyRevision += 1;
     const remote = await tryOwnerIntent(state, {
       type: "policy_update",
@@ -758,6 +762,7 @@ export async function setEmergencyFreeze(frozen: boolean): Promise<{
   }
   return withState(async (state) => {
     state.policy.frozen = frozen;
+    await syncSpentFromReceipts(state);
     const remote = await tryOwnerIntent(
       state,
       frozen
@@ -784,6 +789,7 @@ export async function runDryRunPreview(intentInput: AegisIntent | unknown): Prom
   }
   return withState(async (state) => {
     ensureBudgetWindow(state);
+    await syncSpentFromReceipts(state);
     saveState(state);
     const remoteQuote = await tryRemoteDryRun(state, intent);
     const local = previewIntent(intent, state.policy, bookFromState(state));
@@ -801,6 +807,7 @@ export async function executeIntentWithGrant(
   }
   return withState(async (state) => {
     ensureBudgetWindow(state);
+    await syncSpentFromReceipts(state);
     const preview = previewIntent(intent, state.policy, bookFromState(state));
     if (!preview.allowed) {
       throw new AgentOperationError("policy_rejected", preview.warnings.join(" ") || "Policy rejected the intent.", 403, preview);
@@ -989,6 +996,14 @@ function mergeRemoteQuote(local: DryRunPreview, remote: QuoteResponse | null): D
   const feeUsd = remote.fee?.amount_usd != null ? finiteNumber(remote.fee.amount_usd, local.quote.feeUsd) : local.quote.feeUsd;
   const spendUsd = remote.spend?.amount_usd != null ? finiteNumber(remote.spend.amount_usd, local.budgetImpact.txUsd) : local.budgetImpact.txUsd;
   const expected = stringField(remote.quote, ["expected_amount_out", "amount_out", "expectedAmountOut"]);
+  const spend = projectSpend(local.budgetImpact.currentSpentUsd, spendUsd);
+  const daily = local.budgetImpact.dailyLimitUsd;
+  if (spend.projectedSpentUsd > daily + 1e-9 && !warnings.some((warning) => warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED"))) {
+    local.allowed = false;
+    warnings.push(
+      `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${spend.currentSpentUsd.toFixed(2)}, this action is $${spend.txUsd.toFixed(2)}, projected $${spend.projectedSpentUsd.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
+    );
+  }
   return {
     ...local,
     warnings,
@@ -999,7 +1014,10 @@ function mergeRemoteQuote(local: DryRunPreview, remote: QuoteResponse | null): D
     },
     budgetImpact: {
       ...local.budgetImpact,
-      txUsd: round2(spendUsd),
+      currentSpentUsd: spend.currentSpentUsd,
+      txUsd: spend.txUsd,
+      projectedSpentUsd: spend.projectedSpentUsd,
+      utilizationPct: daily > 0 ? round1((spend.projectedSpentUsd / daily) * 100) : 0,
     },
   };
 }
@@ -1023,8 +1041,6 @@ async function hydrateRemote(state: PersistedState): Promise<"local-ledger" | "r
       if (policy.policy.budget.daily_usd != null) {
         state.policy.dailyBudgetUsd = finiteNumber(policy.policy.budget.daily_usd, state.policy.dailyBudgetUsd);
       }
-      const spent = policy.usage?.budget?.daily?.spent_usd;
-      if (spent != null) state.policy.spentTodayUsd = finiteNumber(spent, state.policy.spentTodayUsd);
       if (typeof policy.revision === "number") state.policyRevision = policy.revision;
     }
     const nextPublic = remoteBalanceMap(publicBalances.balances);
@@ -1085,11 +1101,9 @@ function applyBalances(state: PersistedState, intent: AegisIntent, preview: DryR
     const shard = intent.confidential ? "confidential" : "public";
     move(state, shard, origin.asset_id, -notional.atomic);
     move(state, shard, destination.asset_id, credit);
-    state.policy.spentTodayUsd = preview.budgetImpact.projectedSpentUsd;
   } else if (intent.action === "transfer" || intent.action === "withdraw") {
     const shard = intent.confidential ? "confidential" : "public";
     move(state, shard, origin.asset_id, -notional.atomic);
-    state.policy.spentTodayUsd = preview.budgetImpact.projectedSpentUsd;
   } else if (intent.action === "shield") {
     move(state, "public", origin.asset_id, -notional.atomic);
     move(state, "confidential", origin.asset_id, notional.atomic);
@@ -1097,6 +1111,7 @@ function applyBalances(state: PersistedState, intent: AegisIntent, preview: DryR
     move(state, "confidential", origin.asset_id, -notional.atomic);
     move(state, "public", origin.asset_id, notional.atomic);
   }
+  state.policy.spentTodayUsd = preview.budgetImpact.projectedSpentUsd;
 }
 
 function move(state: PersistedState, shard: "public" | "confidential", assetId: string, delta: bigint): void {
@@ -1147,27 +1162,28 @@ type NormalizedTee = {
   signingAddress: string;
 };
 
-function normalizeTee(input: TeeProofInput | null | undefined, intent: AegisIntent): NormalizedTee {
-  const requestSha256 = digestOr(
-    firstString(input?.requestSha256, input?.request_sha256),
-    sha256Hex(JSON.stringify({ kind: "aegis-intent", intent })),
-  );
-  const responseSha256 = digestOr(
-    firstString(input?.responseSha256, input?.response_sha256),
-    sha256Hex(JSON.stringify({ kind: "aegis-execution", intent })),
-  );
-  const ops = loadOpsKey();
-  return {
-    chatId: firstString(input?.chatId, input?.near_ai_chat_id) || `chatcmpl-local-${responseSha256.slice(0, 24)}`,
-    requestSha256,
-    responseSha256,
-    signature: firstString(input?.signature, input?.tee_signature) || signWithKey(ops.privateKeyPem, `${requestSha256}:${responseSha256}`),
-    signingAddress: firstString(input?.signing_address, input?.tee_signing_address, input?.signingAddress) || ops.signingAddress,
-  };
-}
-
-function digestOr(value: string, fallback: string): string {
-  return /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : fallback;
+function normalizeTee(input: TeeProofInput | null | undefined, _intent: AegisIntent): NormalizedTee {
+  const requestSha256 = firstString(input?.requestSha256, input?.request_sha256).toLowerCase();
+  const responseSha256 = firstString(input?.responseSha256, input?.response_sha256).toLowerCase();
+  const signature = firstString(input?.signature, input?.tee_signature);
+  const signingAddress = firstString(input?.signing_address, input?.tee_signing_address, input?.signingAddress);
+  const chatId = firstString(input?.chatId, input?.near_ai_chat_id);
+  const signatureHex = signature.replace(/^0x/i, "");
+  if (
+    input?.verificationStatus !== "verified" ||
+    !/^[0-9a-f]{64}$/.test(requestSha256) ||
+    !/^[0-9a-f]{64}$/.test(responseSha256) ||
+    signatureHex.length < 64 ||
+    !signingAddress ||
+    !chatId
+  ) {
+    throw new AgentOperationError(
+      "attestation_unverified",
+      "Execution needs a verified NEAR AI Cloud TEE signature. This response did not include one.",
+      409,
+    );
+  }
+  return { chatId, requestSha256, responseSha256, signature, signingAddress };
 }
 
 function toSdkPolicy(state: PersistedState): Policy {
@@ -1521,6 +1537,15 @@ function ensureBudgetWindow(state: PersistedState): void {
   }
 }
 
+async function syncSpentFromReceipts(state: PersistedState): Promise<void> {
+  try {
+    const records = await listReceiptRecords();
+    state.policy.spentTodayUsd = sumTodayReceiptUsd(Object.values(records), state.budgetDay || utcDayStamp());
+  } catch {
+    state.policy.spentTodayUsd = 0;
+  }
+}
+
 function describeRoute(intent: AegisIntent, origin: string, destination: string, shard: "intents.near" | "intents.far"): string {
   if (intent.action === "swap") return `${shard} · ${origin} → ${destination}`;
   if (intent.action === "shield") return `intents.near → intents.far · shield ${origin}`;
@@ -1620,8 +1645,7 @@ function trimFixed(value: number, places: number): string {
 }
 
 function round2(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.round(value * 100) / 100;
+  return roundUsd(value);
 }
 
 function round1(value: number): number {

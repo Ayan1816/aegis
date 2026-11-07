@@ -89,6 +89,12 @@ export function signatureCurl(baseUrl: string, chatId: string, model: string): s
   return `curl -sS ${shellQuote(url)} -H ${shellQuote("Authorization: Bearer $NEAR_AI_CLOUD_API_KEY")}`;
 }
 
+export function attestationCurl(baseUrl: string, model: string, nonce: string): string {
+  const root = baseUrl.replace(/\/$/, "") || "https://cloud-api.near.ai/v1";
+  const url = `${root}/attestation/report?model=${encodeURIComponent(model)}&nonce=${encodeURIComponent(nonce)}`;
+  return `curl -sS ${shellQuote(url)} -H ${shellQuote("Authorization: Bearer $NEAR_AI_CLOUD_API_KEY")}`;
+}
+
 export function statusTone(status: NetworkComponentStatus | undefined): string {
   if (status === "operational") return "bg-[#00EC97] shadow-[0_0_10px_#00EC97]";
   if (status === "degraded") return "bg-[#FF8A00] shadow-[0_0_10px_#FF8A00]";
@@ -107,12 +113,4 @@ export function actionTone(action: string): string {
 
 export function isIntentAction(value: string): value is IntentAction {
   return value === "swap" || value === "transfer" || value === "withdraw" || value === "shield" || value === "unshield";
-}
-
-export function receiptPayload(row: VerifiedExecution, contractId: string) {
-  return {
-    ...row,
-    contract_id: contractId,
-    get_execution: getExecutionCommand(contractId, row.correlation_id),
-  };
 }

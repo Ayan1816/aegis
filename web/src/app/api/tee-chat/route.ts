@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAgentState, runDryRunPreview } from "@/lib/intents-agent";
 import { isTeeModel, readEnclaveTelemetry, runAttestedInference, TEE_MODELS } from "@/lib/near-ai-tee";
+import type { LoaderStep } from "@/lib/chat-stream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,22 +35,82 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  const input = {
+    message,
+    model: typeof record.model === "string" ? record.model : undefined,
+    autoRedact: record.autoRedact !== false,
+  };
+  if (record.stream === true) return streamChat(input);
   try {
-    const state = await getAgentState();
-    const attestation = await runAttestedInference({
-      userMessage: message,
-      model: typeof record.model === "string" ? record.model : undefined,
-      autoRedact: record.autoRedact !== false,
-      policyContext: state.policy,
-      balancesContext: state.balances,
-    });
-    const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
-    return NextResponse.json({ attestation, dryRun });
+    const payload = await runChat(input);
+    return NextResponse.json(payload);
   } catch (error) {
-    const messageText = error instanceof Error ? error.message : "TEE inference failed.";
-    const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
-    return NextResponse.json({ error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } }, { status });
+    return chatError(error);
   }
+}
+
+async function streamChat(input: { message: string; model?: string; autoRedact: boolean }) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      };
+      try {
+        send("step", { step: "redacting" satisfies LoaderStep });
+        const attestation = await infer(input, {
+          onStep: (step) => {
+            if (step !== "policy") send("step", { step });
+          },
+          onDelta: (text) => send("delta", { text }),
+        });
+        send("step", { step: "policy" satisfies LoaderStep });
+        const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
+        send("done", { attestation, dryRun });
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : "TEE inference failed.";
+        const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
+        send("error", { error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+async function runChat(input: { message: string; model?: string; autoRedact: boolean }) {
+  const attestation = await infer(input);
+  const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
+  return { attestation, dryRun };
+}
+
+async function infer(
+  input: { message: string; model?: string; autoRedact: boolean },
+  hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void },
+) {
+  const state = await getAgentState();
+  return runAttestedInference({
+    userMessage: input.message,
+    model: input.model,
+    autoRedact: input.autoRedact,
+    policyContext: state.policy,
+    balancesContext: state.balances,
+    onStep: hooks?.onStep,
+    onDelta: hooks?.onDelta,
+  });
+}
+
+function chatError(error: unknown) {
+  const messageText = error instanceof Error ? error.message : "TEE inference failed.";
+  const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
+  return NextResponse.json({ error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } }, { status });
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

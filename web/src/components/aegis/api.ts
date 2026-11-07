@@ -11,6 +11,8 @@ import type {
   TeeCatalogResponse,
   TeeChatResponse,
 } from "@/lib/dashboard-types";
+import { isLoaderStep, parseSseBlock, type LoaderStep } from "@/lib/chat-stream";
+import type { WalletProofWire } from "@/lib/wallet-proof";
 
 export class DeckRequestError extends Error {
   readonly code: string;
@@ -65,37 +67,96 @@ export async function postTeeChat(body: { message: string; model: string; autoRe
   });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);
+  return readTeeChat(data);
+}
+
+export async function postTeeChatStream(
+  body: { message: string; model: string; autoRedact: boolean },
+  handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void } = {},
+): Promise<TeeChatResponse> {
+  const response = await fetch("/api/tee-chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!response.ok) {
+    const data = await readJson(response);
+    throw fail(data, response.status);
+  }
+  if (!response.body) throw new DeckRequestError("bad_response", "TEE chat stream was empty.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let donePayload: TeeChatResponse | null = null;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const parsed = parseSseBlock(part);
+      if (!parsed) continue;
+      if (parsed.event === "step") {
+        const step = isRecord(parsed.data) && typeof parsed.data.step === "string" ? parsed.data.step : "";
+        if (isLoaderStep(step)) handlers.onStep?.(step);
+      } else if (parsed.event === "delta") {
+        const text = isRecord(parsed.data) && typeof parsed.data.text === "string" ? parsed.data.text : "";
+        if (text) handlers.onDelta?.(text);
+      } else if (parsed.event === "error") {
+        const data = parsed.data;
+        throw fail(isRecord(data) ? data : { error: { message: "TEE chat failed." } }, 500);
+      } else if (parsed.event === "done") {
+        donePayload = readTeeChat(parsed.data);
+      }
+    }
+  }
+  if (!donePayload) throw new DeckRequestError("bad_response", "TEE chat stream ended before a result.");
+  return donePayload;
+}
+
+function readTeeChat(data: unknown): TeeChatResponse {
   if (!isRecord(data) || !isRecord(data.attestation) || !isRecord((data.attestation as { decision?: unknown }).decision)) {
     throw new DeckRequestError("bad_response", "TEE chat response was missing attestation.");
   }
   return data as TeeChatResponse;
 }
 
-export async function postPolicy(policy: PolicyPatch): Promise<PolicyUpdateResponse> {
-  return postIntent<PolicyUpdateResponse>("update_policy", { policy });
+export async function postPolicy(policy: PolicyPatch, wallet: WalletProofWire): Promise<PolicyUpdateResponse> {
+  return postIntent<PolicyUpdateResponse>("update_policy", { policy }, wallet);
 }
 
-export async function postGrant(type: "rotate_grant" | "revoke_grant"): Promise<GrantResponse> {
-  return postIntent<GrantResponse>(type, {});
+export async function postGrant(type: "rotate_grant" | "revoke_grant", wallet: WalletProofWire): Promise<GrantResponse> {
+  return postIntent<GrantResponse>(type, {}, wallet);
 }
 
-export async function postFreeze(frozen: boolean): Promise<FreezeResponse> {
-  return postIntent<FreezeResponse>("emergency_freeze", { frozen });
+export async function postFreeze(frozen: boolean, wallet: WalletProofWire): Promise<FreezeResponse> {
+  return postIntent<FreezeResponse>("emergency_freeze", { frozen }, wallet);
 }
 
 export async function postDryRun(intent: unknown): Promise<DryRunResponse> {
   return postIntent<DryRunResponse>("dry_run", { intent });
 }
 
-export async function postExecute(intent: unknown, teeAttestation: Record<string, string>): Promise<ExecuteResponse> {
-  return postIntent<ExecuteResponse>("execute", { intent, teeAttestation });
+export async function postExecute(
+  intent: unknown,
+  teeAttestation: Record<string, string>,
+  wallet: WalletProofWire,
+): Promise<ExecuteResponse> {
+  return postIntent<ExecuteResponse>("execute", { intent, teeAttestation }, wallet);
 }
 
-async function postIntent<T>(type: string, payload: Record<string, unknown>): Promise<T> {
+export async function postSaveTx(id: string, txHash: string, wallet: WalletProofWire): Promise<{ type: "save_tx"; id: string; tx_hash: string }> {
+  return postIntent("save_tx", { id, tx_hash: txHash }, wallet);
+}
+
+async function postIntent<T>(type: string, payload: Record<string, unknown>, wallet?: WalletProofWire | null): Promise<T> {
+  const body: Record<string, unknown> = { type, payload };
+  if (wallet) body.wallet = wallet;
   const response = await fetch("/api/intents", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type, payload }),
+    body: JSON.stringify(body),
   });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);

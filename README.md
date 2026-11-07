@@ -24,9 +24,13 @@ The center column animates a voice waveform for `bn-BD` / `en-US` Web Speech and
 | | |
 | --- | --- |
 | Contract ID | `kotha-vault-1793945609.testnet` |
+| Live app | https://kotha-ayan19.vercel.app |
 | NearBlocks Testnet | https://testnet.nearblocks.io/address/kotha-vault-1793945609.testnet |
 | RPC | `https://rpc.testnet.near.org` |
 | App env | `NEXT_PUBLIC_NEAR_CONTRACT_ID=kotha-vault-1793945609.testnet` in `web/.env.local` and `web/.env.example` |
+| Wallet network | `NEXT_PUBLIC_NETWORK=testnet` |
+| Contract id | `NEXT_PUBLIC_CONTRACT_ID=kotha-vault-1793945609.testnet` (same account; `NEXT_PUBLIC_NEAR_CONTRACT_ID` still works) |
+| Owner wallet | `NEXT_PUBLIC_OWNER_ID=kotha-vault-1793945609.testnet` |
 | Code default | `DEFAULT_CONTRACT_ID` in `web/src/lib/near-vault-rpc.ts` and the telemetry fallback in `web/src/components/aegis/telemetry-bar.tsx` |
 | Faucet receipt | `6edKUMQyRAHpu2ZApdQ56XnXLhtsiomTcL3UvF5QK6o8` |
 | Access key | `ed25519:2AjaJqi8tMPWs9UBTqWJQNJ3tfj7DpAqZBuzaxLgogx8` |
@@ -156,6 +160,14 @@ curl -sS https://rpc.testnet.near.org \
   -d '{"jsonrpc":"2.0","id":"status","method":"status","params":[]}'
 ```
 
+## NEAR Wallet
+
+NEAR Connect signs the owner in through `NearProvider`. The header shows **Connect Wallet** (`ওয়ালেট যুক্ত করুন`) or **Disconnect** plus the account id (`ওয়ালেট বিচ্ছিন্ন করুন`). While `NEXT_PUBLIC_NETWORK` is `testnet` (the default), the header shows one amber badge whose text is `Testnet Demo`. On a testnet account the UI, headers, and receipts do not print the word mainnet. Explorer links stay `https://testnet.nearblocks.io/txns/<hash>`.
+
+Policy save, Rotate Grant, Revoke Grant, Emergency Freeze, and Execute stay disabled with the tooltip "Connect the owner wallet" until `signedAccountId` equals `NEXT_PUBLIC_OWNER_ID`. Dry-run and chat stay open. Those owner actions call `signNEP413Message` with `recipient` `kotha` and send `{ accountId, publicKey, signature, message, nonce }` to `/api/intents`. The route verifies the NEP-413 signature with `near-api-js`, confirms the public key is on the account via RPC `view_access_key_list`, confirms `accountId === OWNER_ID`, and returns 401 when `ts` is older than 5 minutes.
+
+After a successful execute, the owner wallet calls `record_execution` with gas `30000000000000` and deposit `0`. The live method takes `{"execution": VerifiedExecution}`, so the receipt hash is sent as `response_sha256` and `get_execution` is read with `correlation_id`. The transaction hash is stored on the frozen receipt and linked at `https://testnet.nearblocks.io/txns/<hash>`. **Verify on-chain** shows a green "Matches chain" badge or a red "Mismatch" badge. `usd_amount_cents` and `timestamp_ns` are digit strings in the wallet args because JavaScript cannot keep integers above 2^53 exact; the server signer path still writes unquoted digits when `NEAR_PRIVATE_KEY` is the broadcaster. A wallet-authenticated execute skips that server broadcast so the same correlation id is not submitted twice.
+
 ## Quickstart
 
 ```bash
@@ -176,6 +188,9 @@ npm run dev
 Open `http://localhost:3000`. `web/.env.local` is gitignored. Copy `web/.env.example` and keep `NEAR_AI_CLOUD_API_KEY` only on the machine that runs the enclave.
 
 ```bash
+NEXT_PUBLIC_NETWORK=testnet
+NEXT_PUBLIC_CONTRACT_ID=kotha-vault-1793945609.testnet
+NEXT_PUBLIC_OWNER_ID=kotha-vault-1793945609.testnet
 NEXT_PUBLIC_NEAR_CONTRACT_ID=kotha-vault-1793945609.testnet
 NEAR_RPC_URL=https://rpc.testnet.near.org
 NEAR_AI_CLOUD_API_KEY=
@@ -183,6 +198,25 @@ NEAR_AI_MODEL=deepseek/deepseek-v3.2
 NEAR_INTENTS_AGENT_API_URL=https://api.demo.agentsonintents.com
 NEAR_INTENTS_AGENT_API_KEY=
 NEAR_INTENTS_GRANT_TOKEN=
+NEAR_ACCOUNT_ID=
+NEAR_PRIVATE_KEY=
 ```
+
+`NEAR_ACCOUNT_ID` and `NEAR_PRIVATE_KEY` are the server signer for a non-wallet `record_execution`. Leave them empty in git. `NEAR_AI_CLOUD_API_KEY` is the bearer token for NEAR AI chat, privacy redact, and whisper. `NEXT_PUBLIC_OWNER_ID` is the account that may change policy, rotate or revoke a grant, freeze, and execute.
+
+## Judge the demo
+
+Open https://kotha-ayan19.vercel.app (or `http://localhost:3000` after `npm run dev`).
+
+1. Load the page -> see one amber badge reading `Testnet Demo`. The header names the agent and owner and does not say mainnet.
+2. Leave the wallet disconnected and send `আমার ২ NEAR দিয়ে USDT কিনে দাও` -> see the loader `Redacting → TEE thinking → Verifying → Policy check` (বাংলায় `রিড্যাক্ট করা হচ্ছে → টিইই ভাবছে → যাচাই হচ্ছে → নীতি যাচাই`), a typed answer, and a dry-run quote. Save policy, Rotate Grant, Revoke Grant, Emergency Freeze, and Execute stay disabled with `Connect the owner wallet`.
+3. Connect the owner wallet `kotha-vault-1793945609.testnet` and approve the NEP-413 prompt -> those controls enable. A different account stays read-only. Chat and dry-run stay available either way.
+4. Switch the language control to `বাং` -> labels, the loader, and the proof panel switch to Bengali. The story sentence and the `Testnet Demo` badge stay as written. The brand title stays `Kotha — Speak. Verify. Execute.`
+5. Press the mic in a browser with the Web Speech API -> the live transcript fills the input in `bn-BD` or `en-US`. In a browser without that API, the mic records audio and uploads it to `/api/voice-transcribe`, which forwards the file to `https://cloud-api.near.ai/v1/audio/transcriptions` with model `openai/whisper-large-v3`. The transcript lands in the input and is not sent until you press Send.
+6. Send a phone number such as `01711223344` -> the prompt that leaves the privacy boundary shows `[REDACTED_PHONE]`, and the badge counts the PII types.
+7. Open the proof drawer on a 375px-wide screen -> labels sit on their own row, long hashes wrap or truncate, and the TEE, risk, and policy badges wrap instead of overlapping.
+8. A green `✓ TEE Verified` badge appears only after the NEAR AI signature recovers to the attestation signing address and the response hash matches the raw chat body. Otherwise the badge stays amber and Execute stays blocked.
+9. As the owner, press Execute -> the wallet calls `record_execution` (gas `30000000000000`, deposit `0`). A link to `https://testnet.nearblocks.io/txns/<hash>` appears. **Verify on-chain** shows green `Matches chain` or red `Mismatch`.
+10. Download the same receipt twice -> the bytes match. Spending Guard shows projected spend as today's receipts plus this transaction for swap, transfer, shield, unshield, and withdraw.
 
 `node_modules`, `contract/target`, and `web/.env.local` stay out of git. Pushes to `main` run `.github/workflows/ci.yml` (contract tests and web typecheck) and `.github/workflows/ci-deploy.yml` (those checks, plus the WASM build and Testnet deploy) on GitHub-hosted `ubuntu-latest`.
