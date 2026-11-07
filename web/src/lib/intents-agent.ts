@@ -817,7 +817,7 @@ export async function executeIntentWithGrant(
     const dispatched = await dispatchOrFallback(state, intent, preview, idempotencyKey);
     applyBalances(state, intent, preview);
     saveState(state);
-    const tee = normalizeTee(teeAttestation, intent);
+    const tee = normalizeTee(teeAttestation);
     const proof = buildOperationProof(state, dispatched.correlationId, intent, tee, dispatched.merkleRoot, dispatched.verified);
     const notional = resolveNotional(intent, assetMeta(intent.origin_asset), priceOf(state, intent.origin_asset));
     return {
@@ -1162,7 +1162,7 @@ type NormalizedTee = {
   signingAddress: string;
 };
 
-function normalizeTee(input: TeeProofInput | null | undefined, _intent: AegisIntent): NormalizedTee {
+function normalizeTee(input: TeeProofInput | null | undefined): NormalizedTee {
   const requestSha256 = firstString(input?.requestSha256, input?.request_sha256).toLowerCase();
   const responseSha256 = firstString(input?.responseSha256, input?.response_sha256).toLowerCase();
   const signature = firstString(input?.signature, input?.tee_signature);

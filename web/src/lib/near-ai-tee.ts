@@ -382,6 +382,7 @@ async function attestHardware(args: {
     return packInference({
       ...args,
       decision,
+      rawResponseText: args.responseText,
       responseSha256,
       chatId: "",
       nonce,
@@ -417,6 +418,7 @@ async function attestHardware(args: {
   return packInference({
     ...args,
     decision,
+    rawResponseText: args.responseText,
     responseSha256,
     chatId,
     nonce,

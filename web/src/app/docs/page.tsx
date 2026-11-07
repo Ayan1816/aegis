@@ -14,6 +14,7 @@ import {
   SOURCE_MODULES,
   TEST_FILES,
 } from "@/lib/judge-catalog";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type LiveResult = { status: number; contentType: string; body: string; ms: number; error?: string };
@@ -99,9 +100,9 @@ export default function DocsPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-6 text-[#e8fff6]">
       <header className="flex flex-col gap-3">
-        <a href="/" className="w-fit text-sm text-[#00EC97] underline-offset-4 hover:underline">
+        <Link href="/" className="w-fit text-sm text-[#00EC97] underline-offset-4 hover:underline">
           Back to Kotha
-        </a>
+        </Link>
         <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-[#00EC97]">Docs & Judge Portal</p>
         <h1 className="text-2xl font-semibold leading-snug text-white">{JUDGE_TITLE}</h1>
         <p className="max-w-3xl text-sm leading-6 text-white/70">

@@ -9,6 +9,7 @@ import type { AgentStateView, ChatModelId, EnclaveTelemetry, NetworkSnapshot, Va
 import { CHAT_MODELS } from "@/lib/dashboard-types";
 import { ShieldCheck } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useState, type ReactNode } from "react";
 
 const TeeModal = dynamic(() => import("@/components/aegis/tee-modal").then((mod) => mod.TeeModal), { ssr: false });
@@ -92,24 +93,24 @@ export function TelemetryBar({
       </div>
 
       <nav aria-label="Judge portal" className="flex w-full flex-wrap gap-2">
-        <a
+        <Link
           href="/docs"
           className="rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 py-1 text-[12px] text-[#00EC97]"
         >
           {translate(lang, "docsNav")}
-        </a>
+        </Link>
         <a href="/llms.txt" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
           /llms.txt
         </a>
         <a href="/openapi.json" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
           /openapi.json
         </a>
-        <a
+        <Link
           href="/api/receipts/export-statement"
           className="rounded-full border border-white/15 px-3 py-1 text-[12px] text-white/70"
         >
           {translate(lang, "statementNav")}
-        </a>
+        </Link>
       </nav>
 
       <div className="flex flex-wrap gap-2">
