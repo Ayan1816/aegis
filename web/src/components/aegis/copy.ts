@@ -214,6 +214,8 @@ const en = {
   chainAmountMismatch: "amount_usd does not match get_execution.",
   chainTimeMismatch: "timestamp does not match get_execution.",
   chainReceiptMatch: "receipt_hash matches get_execution.",
+  docsNav: "Docs & Judge Portal",
+  statementNav: "Audit statement",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -431,6 +433,8 @@ const bn: { [K in CopyKey]: string } = {
   chainAmountMismatch: "ডলার পরিমাণ get_execution-এর সাথে মেলে না।",
   chainTimeMismatch: "সময় get_execution-এর সাথে মেলে না।",
   chainReceiptMatch: "রসিদ হ্যাশ get_execution-এর সাথে মিলেছে।",
+  docsNav: "ডকস ও বিচার পোর্টাল",
+  statementNav: "অডিট বিবরণী",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

@@ -21,6 +21,7 @@ export function TelemetryBar({
   intensity,
   onLang,
   onIntensity,
+  network,
   enclave,
   model,
   onModel,
@@ -89,6 +90,27 @@ export function TelemetryBar({
           />
         </div>
       </div>
+
+      <nav aria-label="Judge portal" className="flex w-full flex-wrap gap-2">
+        <a
+          href="/docs"
+          className="rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 py-1 text-[12px] text-[#00EC97]"
+        >
+          {translate(lang, "docsNav")}
+        </a>
+        <a href="/llms.txt" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
+          /llms.txt
+        </a>
+        <a href="/openapi.json" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
+          /openapi.json
+        </a>
+        <a
+          href="/api/receipts/export-statement"
+          className="rounded-full border border-white/15 px-3 py-1 text-[12px] text-white/70"
+        >
+          {translate(lang, "statementNav")}
+        </a>
+      </nav>
 
       <div className="flex flex-wrap gap-2">
         <Pill title={translate(lang, "nearHint")}>
