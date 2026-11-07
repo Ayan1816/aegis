@@ -1,5 +1,6 @@
 "use client";
 
+import { useKothaSession } from "@/app/providers";
 import { translate, type Intensity, type Lang } from "@/components/aegis/copy";
 import { statusTone } from "@/components/aegis/format";
 import { WalletButton } from "@/components/WalletButton";
@@ -9,8 +10,9 @@ import type { AgentStateView, ChatModelId, EnclaveTelemetry, NetworkSnapshot, Va
 import { CHAT_MODELS } from "@/lib/dashboard-types";
 import { ShieldCheck } from "lucide-react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useState, type ReactNode } from "react";
+
+export type TeePhase = "idle" | "unverified" | "verified";
 
 const TeeModal = dynamic(() => import("@/components/aegis/tee-modal").then((mod) => mod.TeeModal), { ssr: false });
 
@@ -29,6 +31,7 @@ export function TelemetryBar({
   vault,
   balances,
   frozen,
+  teePhase,
 }: {
   lang: Lang;
   intensity: Intensity;
@@ -41,10 +44,15 @@ export function TelemetryBar({
   vault: VaultInfo | null;
   balances: AgentStateView["balances"] | null;
   frozen: boolean;
+  teePhase: TeePhase;
 }) {
   const [open, setOpen] = useState(false);
+  const session = useKothaSession();
   const contractId = vault?.contractId || publicContractId();
-  const badge = networkBadgeLabel();
+  const badge = networkBadgeLabel(session.network);
+  const teeLabel =
+    teePhase === "verified" ? translate(lang, "verifiedBadge") : teePhase === "unverified" ? translate(lang, "unverifiedBadge") : translate(lang, "teeReady");
+  const teeColor = teePhase === "verified" ? "text-[#00EC97]" : teePhase === "unverified" ? "text-[#FF8A00]" : "text-[#7DD3FC]";
 
   return (
     <header className="flex flex-col gap-3">
@@ -61,7 +69,7 @@ export function TelemetryBar({
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           {badge ? (
             <span
               title={badge}
@@ -70,6 +78,15 @@ export function TelemetryBar({
               {translate(lang, "testnetDemo")}
             </span>
           ) : null}
+          <Segment
+            label={translate(lang, "networkHint")}
+            options={[
+              { id: "testnet", text: translate(lang, "networkTestnet") },
+              { id: "mainnet", text: translate(lang, "networkMainnet") },
+            ]}
+            value={session.network}
+            onChange={(id) => session.setNetwork(id === "mainnet" ? "mainnet" : "testnet")}
+          />
           <WalletButton lang={lang} />
           <Segment
             label={translate(lang, "langHint")}
@@ -92,27 +109,6 @@ export function TelemetryBar({
         </div>
       </div>
 
-      <nav aria-label="Judge portal" className="flex w-full flex-wrap gap-2">
-        <Link
-          href="/docs"
-          className="rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 py-1 text-[12px] text-[#00EC97]"
-        >
-          {translate(lang, "docsNav")}
-        </Link>
-        <a href="/llms.txt" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
-          /llms.txt
-        </a>
-        <a href="/openapi.json" className="rounded-full border border-white/15 px-3 py-1 font-mono text-[12px] text-white/70">
-          /openapi.json
-        </a>
-        <Link
-          href="/api/receipts/export-statement"
-          className="rounded-full border border-white/15 px-3 py-1 text-[12px] text-white/70"
-        >
-          {translate(lang, "statementNav")}
-        </Link>
-      </nav>
-
       <div className="flex flex-wrap gap-2">
         <Pill title={translate(lang, "nearHint")}>
           <span className="text-[10px] uppercase tracking-[0.18em] text-white/50">{translate(lang, "nearIntents")}</span>
@@ -132,10 +128,8 @@ export function TelemetryBar({
 
         <button type="button" onClick={() => setOpen(true)} title={translate(lang, "teeHint")} className="text-left">
           <Pill>
-            <ShieldCheck className={`h-4 w-4 ${enclave?.status === "live" && !frozen ? "text-[#00EC97]" : "text-[#FF8A00]"}`} />
-            <span className="text-[12px] font-medium">
-              {enclave?.status === "live" ? translate(lang, "teeVerified") : translate(lang, "unverifiedBadge")}
-            </span>
+            <ShieldCheck className={`h-4 w-4 ${teeColor}`} />
+            <span className={`text-[12px] font-medium ${teePhase === "verified" ? "text-[#00EC97]" : ""}`}>{teeLabel}</span>
           </Pill>
         </button>
 
@@ -199,7 +193,7 @@ export function TelemetryBar({
         </div>
       </SpotlightGlassCard>
 
-      {open && enclave ? <TeeModal lang={lang} enclave={enclave} onClose={() => setOpen(false)} /> : null}
+      {open && enclave ? <TeeModal lang={lang} enclave={enclave} teePhase={teePhase} onClose={() => setOpen(false)} /> : null}
     </header>
   );
 }

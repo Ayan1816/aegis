@@ -49,8 +49,21 @@ export async function fetchDashboard(): Promise<DashboardResponse> {
   return data as DashboardResponse;
 }
 
+const NEAR_AI_STORAGE = "kotha-near-ai-key";
+
+function withNearAiKey(headers: Record<string, string>): Record<string, string> {
+  if (typeof window === "undefined") return headers;
+  try {
+    const key = window.sessionStorage.getItem(NEAR_AI_STORAGE)?.trim();
+    if (key) headers["x-kotha-near-ai-key"] = key;
+  } catch {
+    // sessionStorage can throw in a locked browser.
+  }
+  return headers;
+}
+
 export async function fetchTeeCatalog(): Promise<TeeCatalogResponse> {
-  const response = await fetch("/api/tee-chat", { cache: "no-store" });
+  const response = await fetch("/api/tee-chat", { cache: "no-store", headers: withNearAiKey({}) });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);
   if (!isRecord(data) || !isRecord(data.enclave) || !Array.isArray(data.models)) {
@@ -62,7 +75,7 @@ export async function fetchTeeCatalog(): Promise<TeeCatalogResponse> {
 export async function postTeeChat(body: { message: string; model: string; autoRedact: boolean }): Promise<TeeChatResponse> {
   const response = await fetch("/api/tee-chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: withNearAiKey({ "content-type": "application/json" }),
     body: JSON.stringify(body),
   });
   const data = await readJson(response);
@@ -76,7 +89,7 @@ export async function postTeeChatStream(
 ): Promise<TeeChatResponse> {
   const response = await fetch("/api/tee-chat", {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "text/event-stream" },
+    headers: withNearAiKey({ "content-type": "application/json", accept: "text/event-stream" }),
     body: JSON.stringify({ ...body, stream: true }),
   });
   if (!response.ok) {

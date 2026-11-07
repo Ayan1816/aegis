@@ -134,7 +134,9 @@ export function nearAiBaseUrl(): string {
   return (process.env.NEAR_AI_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
 }
 
-export function nearAiApiKey(): string | null {
+export function nearAiApiKey(override?: string | null): string | null {
+  const fromCaller = override?.trim();
+  if (fromCaller) return fromCaller;
   const key = process.env.NEAR_AI_CLOUD_API_KEY?.trim();
   return key ? key : null;
 }
@@ -143,9 +145,9 @@ export function isTeeModel(value: string): value is TeeModelId {
   return (TEE_MODELS as readonly string[]).includes(value);
 }
 
-export async function redactPII(text: string): Promise<RedactionResult> {
+export async function redactPII(text: string, apiKey: string | null = nearAiApiKey()): Promise<RedactionResult> {
   return redactSensitiveText(text, {
-    apiKey: nearAiApiKey(),
+    apiKey,
     baseUrl: nearAiBaseUrl(),
     timeoutMs: PRIVACY_TIMEOUT_MS,
   });
@@ -162,10 +164,12 @@ export async function runAttestedInference(params: {
   balancesContext: any;
   onStep?: (step: LoaderStep) => void;
   onDelta?: (text: string) => void;
+  apiKey?: string | null;
 }): Promise<AttestedInference> {
   params.onStep?.("redacting");
   const model = resolveModel(params.model);
-  const redaction = params.autoRedact ? await redactPII(params.userMessage) : null;
+  const apiKey = nearAiApiKey(params.apiKey);
+  const redaction = params.autoRedact ? await redactPII(params.userMessage, apiKey) : null;
   const userMessage = redaction?.redactedText ?? params.userMessage;
   const request = buildChatRequest(model, userMessage, params.policyContext, params.balancesContext);
   const requestBodyStr = JSON.stringify(request);
@@ -194,7 +198,6 @@ export async function runAttestedInference(params: {
     return result;
   };
   params.onStep?.("thinking");
-  const apiKey = nearAiApiKey();
   if (!apiKey) {
     return fallback({
       reason: "NEAR_AI_CLOUD_API_KEY is not set.",
@@ -257,10 +260,10 @@ export async function runAttestedInference(params: {
   });
 }
 
-export async function readEnclaveTelemetry(): Promise<EnclaveTelemetry> {
+export async function readEnclaveTelemetry(apiKey?: string | null): Promise<EnclaveTelemetry> {
   const base = nearAiBaseUrl();
   const model = process.env.NEAR_AI_MODEL && isTeeModel(process.env.NEAR_AI_MODEL) ? process.env.NEAR_AI_MODEL : TEE_MODELS[0];
-  const key = nearAiApiKey();
+  const key = nearAiApiKey(apiKey);
   if (!key) {
     return {
       provider: "NEAR AI Cloud",

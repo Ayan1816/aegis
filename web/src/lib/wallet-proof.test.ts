@@ -17,6 +17,7 @@ import {
   explorerTxUrl,
   findAccessKey,
   isOwnerSigned,
+  ownerActionsOpen,
   parseFrozenReceiptJson,
   requiresOwnerProof,
   txHashFromOutcome,
@@ -67,6 +68,20 @@ describe("wallet proof helpers", () => {
     assert.equal(isOwnerSigned("", ""), false);
     assert.equal(isOwnerSigned("kotha-vault-1793945609.testnet", "kotha-vault-1793945609.testnet"), true);
     assert.equal(isOwnerSigned("other.testnet", "kotha-vault-1793945609.testnet"), false);
+  });
+
+  it("opens a session for another wallet only when the owner is unlocked or the toggle is on", () => {
+    const owner = "kotha-vault-1793945609.testnet";
+    assert.equal(ownerActionsOpen("mohina.near", { sessionOwnerOptIn: false, ownerId: "" }), true);
+    assert.equal(ownerActionsOpen("mohina.near", { sessionOwnerOptIn: false, ownerId: owner }), false);
+    assert.equal(ownerActionsOpen("mohina.near", { sessionOwnerOptIn: true, ownerId: owner }), true);
+    assert.equal(ownerActionsOpen("demo-owner.testnet", { sessionOwnerOptIn: false, ownerId: owner }), true);
+    assert.equal(ownerActionsOpen("", { sessionOwnerOptIn: true, ownerId: "" }), false);
+    assert.equal(isOwnerSigned("mohina.near", owner), false);
+    assert.equal(buildProofMessage("execute", { a: 1 }, 5), JSON.stringify({ action: "execute", payload: { a: 1 }, ts: 5 }));
+    const flagged = buildProofMessage("execute", { a: 1 }, 5, true);
+    assert.equal(JSON.parse(flagged).sessionOwner, true);
+    assert.equal(assessProof(flagged, "execute", { a: 1 }, 5).ok, true);
   });
 
   it("requires a wallet proof for owner actions and not for dry-run", () => {

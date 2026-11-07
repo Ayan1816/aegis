@@ -1,20 +1,24 @@
 "use client";
 
+import { useKothaSession } from "@/app/providers";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Intensity, type Lang } from "@/components/aegis/copy";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
-import { TelemetryBar } from "@/components/aegis/telemetry-bar";
+import { TelemetryBar, type TeePhase } from "@/components/aegis/telemetry-bar";
 import { AuroraEnclaveBackground, KothaStoryBanner, ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
 import type { LoaderStep } from "@/lib/chat-stream";
+import { signDemoProof } from "@/lib/demo-signer";
+import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
   createWalletProof,
   executionViewCall,
-  isOwnerSigned,
+  ownerActionsOpen,
   parseFrozenReceiptJson,
+  proofUsesSessionOwner,
   publicContractId,
   txHashFromOutcome,
   walletRecordCall,
@@ -61,10 +65,15 @@ export function CommandDeck() {
   const [chatStep, setChatStep] = useState<LoaderStep | null>(null);
   const [liveText, setLiveText] = useState("");
   const [latestChain, setLatestChain] = useState<ChainLink | null>(null);
+  const [teePhase, setTeePhase] = useState<TeePhase>("idle");
+  const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
+  const [lastPrompt, setLastPrompt] = useState("");
   const near = useNearWallet();
+  const session = useKothaSession();
+  const activeAccount = session.demoAccountId || near.signedAccountId || "";
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
-  const ownerLock = isOwnerSigned(near.signedAccountId) ? null : translate(lang, "connectOwner");
+  const ownerLock = ownerActionsOpen(activeAccount, { sessionOwnerOptIn: session.sessionOwnerOptIn }) ? null : translate(lang, "connectOwner");
   const thinking = busy === "chat";
 
   useEffect(() => {
@@ -123,11 +132,18 @@ export function CommandDeck() {
     setQuote((current) => (current && sameIntent(current.intent, intent) ? { ...current, dryRun: preview, execution: null } : current));
   }
 
+  async function refreshRemittance(text: string) {
+    setLastPrompt(text);
+    const resolution = await resolveRemittance(text);
+    setRemittanceLine(resolution?.line ?? null);
+  }
+
   async function send(text: string) {
     const id = crypto.randomUUID();
     setQuote(null);
     setQuoteError(null);
     setChatStep("redacting");
+    void refreshRemittance(text);
     setLiveText("");
     setMessages((current) => [...current, { id, role: "user", text }]);
     try {
@@ -147,6 +163,7 @@ export function CommandDeck() {
       const intent = result.attestation.decision.intent;
       const preview = result.dryRun;
       const invalid = intent && preview ? invalidAmountReason(intent, preview.warnings) : null;
+      setTeePhase(result.attestation.verification.status === "verified" ? "verified" : "unverified");
       setMessages((current) => [
         ...current,
         {
@@ -178,6 +195,7 @@ export function CommandDeck() {
       const message = error instanceof Error ? error.message : translate(lang, "loadFail");
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
       setQuote(null);
+      setTeePhase("unverified");
       if (isAmountError(message, error)) setQuoteError(translate(lang, "invalidAmount"));
     } finally {
       setChatStep(null);
@@ -186,8 +204,11 @@ export function CommandDeck() {
   }
 
   async function ownerProof(action: string, payload: Record<string, unknown>) {
-    if (!isOwnerSigned(near.signedAccountId)) throw new Error(translate(lang, "connectOwner"));
-    return createWalletProof((params) => near.signNEP413Message(params), action, payload);
+    const account = session.demoAccountId || near.signedAccountId || "";
+    if (!ownerActionsOpen(account, { sessionOwnerOptIn: session.sessionOwnerOptIn })) throw new Error(translate(lang, "connectOwner"));
+    if (session.demoAccountId) return signDemoProof(action, payload);
+    const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: session.sessionOwnerOptIn });
+    return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
   }
 
   async function savePolicy(patch: PolicyPatch) {
@@ -269,7 +290,7 @@ export function CommandDeck() {
   async function execute() {
     if (!quote) return;
     try {
-      if (!isOwnerSigned(near.signedAccountId)) {
+      if (!ownerActionsOpen(session.demoAccountId || near.signedAccountId, { sessionOwnerOptIn: session.sessionOwnerOptIn })) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -289,6 +310,11 @@ export function CommandDeck() {
       const wallet = await ownerProof("execute", payload);
       const result = await run("execute", () => postExecute(quote.intent, teeAttestation, wallet));
       setQuote((current) => (current ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current));
+      if (result.simulated || session.demoAccountId || result.execution.remote_status === "simulated-demo") {
+        setNotice(translate(lang, "demoSimulated"));
+        await refresh();
+        return;
+      }
       setNotice(translate(lang, "executedNotice"));
       let txHash = result.vault.tx_hash || "";
       let receiptHash = result.vault.receipt_hash || "";
@@ -358,6 +384,7 @@ export function CommandDeck() {
           vault={dashboard?.vaultInfo ?? null}
           balances={dashboard?.agentState.balances ?? null}
           frozen={frozen}
+          teePhase={teePhase}
         />
         <KothaStoryBanner brand={translate(lang, "brand")} story={translate(lang, "story")} />
         {frozen ? (
@@ -443,6 +470,10 @@ export function CommandDeck() {
                 executions={dashboard.executions}
                 contractId={dashboard.vaultInfo.contractId}
                 chainLink={latestChain}
+                remittanceLine={remittanceLine}
+                onPhoneBookChange={() => {
+                  if (lastPrompt) void refreshRemittance(lastPrompt);
+                }}
                 onExecute={() => void execute()}
                 onRefresh={() => void refreshQuote()}
                 onVerifyChain={verifyOnChain}

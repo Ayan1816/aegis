@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import fs from "fs";
-import { aegisStatePath, writeJsonFile } from "./aegis-paths";
+import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 export const DEFAULT_RPC_URL = "https://rpc.testnet.near.org";
@@ -175,7 +175,7 @@ async function callViewText(method: string, args: Record<string, unknown>): Prom
 function readLog(): LogFile {
   const file = aegisStatePath(LOG_FILE);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as LogFile;
+    const parsed = JSON.parse(readTextFile(file)) as LogFile;
     if (parsed?.version === 1 && Array.isArray(parsed.executions)) return parsed;
     throw new Error("invalid vault log");
   } catch (error) {

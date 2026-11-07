@@ -14,6 +14,9 @@ type ReceiptFile = {
   receipts: Record<string, ReceiptRecord>;
 };
 
+const memoryReceipts = new Map<string, ReceiptRecord>();
+let fileDisabled = false;
+
 function kvConfig(): { url: string; token: string } | null {
   if (process.env.KOTHA_RECEIPT_FILE_ONLY === "1") return null;
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
@@ -22,30 +25,69 @@ function kvConfig(): { url: string; token: string } | null {
   return { url: url.replace(/\/$/, ""), token: token.trim() };
 }
 
-function receiptPath(): string {
+function canUseDir(dir: string): boolean {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function receiptPath(): string | null {
   const override = process.env.KOTHA_RECEIPT_STORE?.trim();
   if (override) {
-    fs.mkdirSync(path.dirname(override), { recursive: true });
-    return override;
+    return canUseDir(path.dirname(override)) ? override : null;
   }
-  const dir = path.join(os.homedir(), ".kotha");
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, "receipts.json");
+  if (process.env.VERCEL) {
+    const dir = "/tmp/.kotha";
+    return canUseDir(dir) ? path.join(dir, "receipts.json") : null;
+  }
+  const home = path.join(os.homedir(), ".kotha");
+  if (canUseDir(home)) return path.join(home, "receipts.json");
+  const tmp = "/tmp/.kotha";
+  if (canUseDir(tmp)) return path.join(tmp, "receipts.json");
+  return null;
+}
+
+function memoryStore(): ReceiptFile {
+  const receipts: Record<string, ReceiptRecord> = {};
+  for (const [id, record] of memoryReceipts) receipts[id] = record;
+  return { version: 1, receipts };
 }
 
 function readFileStore(): ReceiptFile {
-  const file = receiptPath();
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as ReceiptFile;
-    if (parsed?.version === 1 && parsed.receipts && typeof parsed.receipts === "object") return parsed;
-  } catch {
-    // A missing file starts empty. A corrupt file is replaced on the next write.
+  if (!fileDisabled) {
+    const file = receiptPath();
+    if (!file) {
+      fileDisabled = true;
+    } else {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as ReceiptFile;
+        if (parsed?.version === 1 && parsed.receipts && typeof parsed.receipts === "object") return parsed;
+      } catch {
+        // A missing file starts empty. A read-only filesystem falls through to memory.
+      }
+    }
   }
-  return { version: 1, receipts: {} };
+  return memoryStore();
 }
 
 function writeFileStore(store: ReceiptFile): void {
-  writeJsonFile(receiptPath(), store);
+  memoryReceipts.clear();
+  for (const [id, record] of Object.entries(store.receipts)) memoryReceipts.set(id, record);
+  if (fileDisabled) return;
+  const file = receiptPath();
+  if (!file) {
+    fileDisabled = true;
+    return;
+  }
+  try {
+    if (!writeJsonFile(file, store)) fileDisabled = true;
+  } catch {
+    fileDisabled = true;
+  }
 }
 
 async function kv(command: unknown[]): Promise<unknown> {

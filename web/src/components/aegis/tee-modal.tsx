@@ -5,7 +5,17 @@ import type { EnclaveTelemetry } from "@/lib/dashboard-types";
 import { X } from "lucide-react";
 import { useEffect } from "react";
 
-export function TeeModal({ lang, enclave, onClose }: { lang: Lang; enclave: EnclaveTelemetry; onClose: () => void }) {
+export function TeeModal({
+  lang,
+  enclave,
+  teePhase,
+  onClose,
+}: {
+  lang: Lang;
+  enclave: EnclaveTelemetry;
+  teePhase: "idle" | "unverified" | "verified";
+  onClose: () => void;
+}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -42,7 +52,11 @@ export function TeeModal({ lang, enclave, onClose }: { lang: Lang; enclave: Encl
           <div className="min-w-0">
             <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[#00EC97]">{translate(lang, "teeTitle")}</div>
             <h2 className="text-lg text-white">
-              {enclave.status === "live" ? translate(lang, "teeVerified") : translate(lang, "unverifiedBadge")}
+              {teePhase === "verified"
+                ? translate(lang, "verifiedBadge")
+                : teePhase === "unverified"
+                  ? translate(lang, "unverifiedBadge")
+                  : translate(lang, "teeReady")}
             </h2>
           </div>
           <button type="button" onClick={onClose} aria-label={translate(lang, "close")} className="rounded-full border border-white/10 p-2 text-white/70">

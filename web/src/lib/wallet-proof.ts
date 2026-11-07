@@ -1,4 +1,5 @@
 export const PROOF_RECIPIENT = "kotha";
+export const DEMO_OWNER_ID = "demo-owner.testnet";
 export const PROOF_MAX_AGE_MS = 5 * 60 * 1000;
 export const PROOF_FUTURE_SKEW_MS = 60 * 1000;
 export const RECORD_GAS = "30000000000000";
@@ -71,6 +72,37 @@ export function isOwnerSigned(accountId: string, expected = configuredOwnerId())
   return Boolean(owner) && accountId === owner;
 }
 
+export function ownerActionsOpen(
+  accountId: string | null | undefined,
+  options: { sessionOwnerOptIn: boolean; ownerId?: string },
+): boolean {
+  const id = (accountId || "").trim();
+  if (!id) return false;
+  const owner = (options.ownerId ?? configuredOwnerId()).trim();
+  if (owner && id === owner) return true;
+  if (id === DEMO_OWNER_ID) return true;
+  if (!owner) return true;
+  return options.sessionOwnerOptIn;
+}
+
+export function proofUsesSessionOwner(accountId: string, options: { sessionOwnerOptIn: boolean; ownerId?: string }): boolean {
+  const id = accountId.trim();
+  const owner = (options.ownerId ?? configuredOwnerId()).trim();
+  if (!id) return false;
+  if (id === DEMO_OWNER_ID) return true;
+  if (owner && id === owner) return false;
+  return options.sessionOwnerOptIn || !owner;
+}
+
+export function proofClaimsSessionOwner(message: string): boolean {
+  try {
+    const parsed = JSON.parse(message) as { sessionOwner?: unknown };
+    return parsed?.sessionOwner === true;
+  } catch {
+    return false;
+  }
+}
+
 export function requiresOwnerProof(type: string): boolean {
   return (OWNER_ACTIONS as readonly string[]).includes(type);
 }
@@ -91,8 +123,9 @@ export function explorerTxUrl(hash: string, network = publicNetwork()): string {
   return `https://testnet.nearblocks.io/txns/${id}`;
 }
 
-export function buildProofMessage(action: string, payload: unknown, ts: number): string {
-  return JSON.stringify({ action, payload, ts });
+export function buildProofMessage(action: string, payload: unknown, ts: number, sessionOwner = false): string {
+  if (!sessionOwner) return JSON.stringify({ action, payload, ts });
+  return JSON.stringify({ action, payload, ts, sessionOwner: true });
 }
 
 export function randomNonce(): Uint8Array {
@@ -278,8 +311,9 @@ export async function createWalletProof(
   action: string,
   payload: unknown,
   now = Date.now(),
+  sessionOwner = false,
 ): Promise<WalletProofWire> {
-  const message = buildProofMessage(action, payload, now);
+  const message = buildProofMessage(action, payload, now, sessionOwner);
   const nonce = randomNonce();
   const signed = await sign({ message, recipient: PROOF_RECIPIENT, nonce });
   return {

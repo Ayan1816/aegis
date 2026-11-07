@@ -3,6 +3,7 @@ import {
   AgentOperationError,
   executeIntentWithGrant,
   getAgentState,
+  simulateDemoExecution,
   getNetworkAndTokens,
   rotateOrRevokeGrant,
   runDryRunPreview,
@@ -13,7 +14,7 @@ import {
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
 import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
 import type { AegisIntent } from "@/lib/dashboard-types";
-import { isPlausibleTxHash, requiresOwnerProof } from "@/lib/wallet-proof";
+import { DEMO_OWNER_ID, isPlausibleTxHash, requiresOwnerProof } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
 export const runtime = "nodejs";
@@ -78,6 +79,21 @@ export async function POST(request: Request) {
     }
     if (type === "execute") {
       const tee = (asRecord(payload.teeAttestation) ?? asRecord(payload.attestation) ?? {}) as TeeProofInput;
+      if (proofAccountId(record.wallet) === DEMO_OWNER_ID) {
+        const execution = await simulateDemoExecution(payload.intent, tee);
+        return NextResponse.json({
+          type,
+          simulated: true,
+          execution,
+          vault: {
+            execution: toVaultRecord(execution),
+            commands: { record_execution: "", get_execution: "" },
+            tx_hash: null,
+            receipt_hash: "",
+            chain_error: "Demo signer does not broadcast or call record_execution.",
+          },
+        });
+      }
       const execution = await executeIntentWithGrant(payload.intent, tee);
       const vault = await recordVerifiedExecution(toVaultRecord(execution));
       const anchored = await anchorExecutionReceipt(execution, asIntent(payload.intent), { skipChain: true });
@@ -154,6 +170,12 @@ function errorResponse(error: unknown) {
   }
   const message = error instanceof Error ? error.message : "Unexpected error.";
   return NextResponse.json({ error: { code: "internal_error", message } }, { status: 500 });
+}
+
+function proofAccountId(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const accountId = (value as { accountId?: unknown }).accountId;
+  return typeof accountId === "string" ? accountId.trim() : "";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -7,9 +7,9 @@ import { WalletAuthError, requireOwnerProof } from "./wallet-verify";
 const OWNER = "kotha-vault-1793945609.testnet";
 const NOW = 1_700_000_000_000;
 
-async function signed(action: string, payload: unknown, ts = NOW, accountId = OWNER) {
+async function signed(action: string, payload: unknown, ts = NOW, accountId = OWNER, sessionOwner = false) {
   const key = KeyPairEd25519.fromRandom();
-  const message = buildProofMessage(action, payload, ts);
+  const message = buildProofMessage(action, payload, ts, sessionOwner);
   const nonce = new Uint8Array(32);
   nonce[0] = 7;
   nonce[31] = 11;
@@ -184,5 +184,53 @@ describe("NEP-413 owner proof", () => {
         }),
       (error: unknown) => error instanceof WalletAuthError && error.code === "proof_invalid",
     );
+  });
+
+  it("accepts the demo signer without calling RPC", async () => {
+    const payload = { policy: { dailyBudgetUsd: 2 } };
+    const { proof } = await signed("update_policy", payload, NOW, "demo-owner.testnet");
+    let called = false;
+    await requireOwnerProof({
+      proof,
+      action: "update_policy",
+      payload,
+      now: NOW,
+      ownerId: OWNER,
+      fetchImpl: async () => {
+        called = true;
+        return { ok: true, json: async () => ({ result: { keys: [] } }) };
+      },
+    });
+    assert.equal(called, false);
+  });
+
+  it("accepts another wallet when the signed message opts into session owner", async () => {
+    const payload = {};
+    const { proof, publicKey } = await signed("rotate_grant", payload, NOW, "mohina.near", true);
+    const calls: string[] = [];
+    await requireOwnerProof({
+      proof,
+      action: "rotate_grant",
+      payload,
+      now: NOW,
+      ownerId: OWNER,
+      fetchImpl: rpc(publicKey, "FullAccess", calls),
+    });
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0]) as { params: { account_id: string } };
+    assert.equal(body.params.account_id, "mohina.near");
+  });
+
+  it("accepts a session owner when the configured owner id is empty", async () => {
+    const payload = { intent: { action: "swap" } };
+    const { proof, publicKey } = await signed("execute", payload, NOW, "alice.testnet", true);
+    await requireOwnerProof({
+      proof,
+      action: "execute",
+      payload,
+      now: NOW,
+      ownerId: "",
+      fetchImpl: rpc(publicKey),
+    });
   });
 });

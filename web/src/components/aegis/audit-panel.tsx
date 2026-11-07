@@ -8,6 +8,7 @@ import { explorerTxUrl } from "@/lib/wallet-proof";
 import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
 import { assetLabel } from "@/components/aegis/format";
+import { PhoneBook } from "@/components/aegis/phone-book";
 import { Download, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -29,6 +30,8 @@ export function AuditPanel({
   executions,
   contractId,
   chainLink,
+  remittanceLine,
+  onPhoneBookChange,
   onExecute,
   onRefresh,
   onVerifyChain,
@@ -46,6 +49,8 @@ export function AuditPanel({
   executions: VerifiedExecution[];
   contractId: string;
   chainLink: ChainLink | null;
+  remittanceLine: string | null;
+  onPhoneBookChange?: () => void;
   onExecute: () => void;
   onRefresh: () => void;
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
@@ -59,8 +64,12 @@ export function AuditPanel({
             <h2 className="text-sm font-semibold text-white">{translate(lang, "quoteTitle")}</h2>
             <p className="mt-1 text-[11px] text-white/45">{translate(lang, "dryFlag")}</p>
           </div>
+          <PhoneBook lang={lang} onChange={onPhoneBookChange} />
+          {remittanceLine && !(intent && dryRun) ? (
+            <p className="break-words font-mono text-[11px] leading-relaxed text-[#d9ffe8]">{remittanceLine}</p>
+          ) : null}
           {intent && dryRun ? (
-            <QuoteBody lang={lang} intent={intent} dryRun={dryRun} />
+            <QuoteBody lang={lang} intent={intent} dryRun={dryRun} remittanceLine={remittanceLine} />
           ) : quoteError ? (
             <p className="text-sm leading-relaxed text-[#ffb3c0]" role="alert">
               {quoteError}
@@ -117,7 +126,7 @@ export function AuditPanel({
   );
 }
 
-function QuoteBody({ lang, intent, dryRun }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview }) {
+function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
   const origin = assetLabel(intent.origin_asset);
   const destination = assetLabel(intent.destination_asset);
   const impact = dryRun.budgetImpact;
@@ -140,6 +149,7 @@ function QuoteBody({ lang, intent, dryRun }: { lang: Lang; intent: AegisIntent; 
         <Info label={translate(lang, "slippage")} value={`${dryRun.quote.slippageBps} bps`} />
         <Info label={translate(lang, "recipient")} value={intent.recipient || "—"} wide />
       </dl>
+      {remittanceLine ? <p className="break-words font-mono text-[11px] leading-relaxed text-[#d9ffe8]">{remittanceLine}</p> : null}
       <p className="break-words font-mono text-[11px] text-white/55">{dryRun.quote.route}</p>
       <div>
         <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-white/45">

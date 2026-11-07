@@ -306,6 +306,7 @@ export type FreezeResponse = {
 
 export type ExecuteResponse = {
   type: "execute";
+  simulated?: boolean;
   execution: ExecutionResult;
   vault: {
     execution: VerifiedExecution;

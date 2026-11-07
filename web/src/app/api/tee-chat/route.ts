@@ -6,8 +6,8 @@ import type { LoaderStep } from "@/lib/chat-stream";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const enclave = await readEnclaveTelemetry();
+export async function GET(request: Request) {
+  const enclave = await readEnclaveTelemetry(callerKey(request));
   return NextResponse.json({
     models: TEE_MODELS,
     enclave,
@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     message,
     model: typeof record.model === "string" ? record.model : undefined,
     autoRedact: record.autoRedact !== false,
+    apiKey: callerKey(request),
   };
   if (record.stream === true) return streamChat(input);
   try {
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function streamChat(input: { message: string; model?: string; autoRedact: boolean }) {
+async function streamChat(input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null }) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -85,14 +86,14 @@ async function streamChat(input: { message: string; model?: string; autoRedact: 
   });
 }
 
-async function runChat(input: { message: string; model?: string; autoRedact: boolean }) {
+async function runChat(input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null }) {
   const attestation = await infer(input);
   const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
   return { attestation, dryRun };
 }
 
 async function infer(
-  input: { message: string; model?: string; autoRedact: boolean },
+  input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null },
   hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void },
 ) {
   const state = await getAgentState();
@@ -100,11 +101,18 @@ async function infer(
     userMessage: input.message,
     model: input.model,
     autoRedact: input.autoRedact,
+    apiKey: input.apiKey,
     policyContext: state.policy,
     balancesContext: state.balances,
     onStep: hooks?.onStep,
     onDelta: hooks?.onDelta,
   });
+}
+
+function callerKey(request: Request): string | null {
+  const value = request.headers.get("x-kotha-near-ai-key")?.trim() || "";
+  if (!value || value.length > 500) return null;
+  return value;
 }
 
 function chatError(error: unknown) {

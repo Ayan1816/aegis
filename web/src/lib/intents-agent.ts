@@ -23,7 +23,7 @@ import {
   type KeyObject,
 } from "crypto";
 import fs from "fs";
-import { aegisStatePath, writeJsonFile } from "./aegis-paths";
+import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 import { projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
 import { listReceiptRecords } from "./receipt-store";
 
@@ -312,7 +312,7 @@ function stateFile(): string {
 function loadState(): PersistedState {
   const file = stateFile();
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as PersistedState;
+    const parsed = JSON.parse(readTextFile(file)) as PersistedState;
     if (parsed?.version !== 1 || !parsed.policy || !parsed.grant || !parsed.balances) {
       throw new Error("invalid agent state");
     }
@@ -839,6 +839,54 @@ export async function executeIntentWithGrant(
       idempotency_key: idempotencyKey,
       proof,
       remote_status: dispatched.remoteStatus,
+      preview,
+    };
+  });
+}
+
+export async function simulateDemoExecution(
+  intentInput: AegisIntent | unknown,
+  teeAttestation?: TeeProofInput | null,
+): Promise<ExecutionResult> {
+  const intent = coerceIntent(intentInput);
+  if (!intent || !intent.origin_asset) {
+    throw new AgentOperationError("invalid_intent", "Intent must include an action and origin_asset.");
+  }
+  return withState(async (state) => {
+    ensureBudgetWindow(state);
+    await syncSpentFromReceipts(state);
+    const preview = previewIntent(intent, state.policy, bookFromState(state));
+    if (!preview.allowed) {
+      throw new AgentOperationError("policy_rejected", preview.warnings.join(" ") || "Policy rejected the intent.", 403, preview);
+    }
+    const tee = normalizeTee(teeAttestation);
+    const correlationId = `demo-${randomUUID()}`;
+    const notional = resolveNotional(intent, assetMeta(intent.origin_asset), priceOf(state, intent.origin_asset));
+    return {
+      allowed: true,
+      executionSource: "local-fallback",
+      correlation_id: correlationId,
+      agent_id: state.agentId,
+      action_type: intent.action,
+      origin_asset: assetMeta(intent.origin_asset).asset_id,
+      destination_asset: assetMeta(intent.destination_asset || intent.origin_asset).asset_id,
+      amount_atomic: notional.atomic.toString(),
+      usd_amount_cents: String(Math.max(0, Math.round(preview.budgetImpact.txUsd * 100))),
+      near_ai_chat_id: tee.chatId,
+      tee_signing_address: tee.signingAddress,
+      request_sha256: tee.requestSha256,
+      response_sha256: tee.responseSha256,
+      tee_signature: tee.signature,
+      timestamp_ns: nowNs(),
+      idempotency_key: `demo-${correlationId}`,
+      proof: {
+        correlation_id: correlationId,
+        merkle_root: "",
+        signature: "",
+        signing_address: "",
+        verified: false,
+      },
+      remote_status: "simulated-demo",
       preview,
     };
   });
@@ -1563,7 +1611,7 @@ function minAmountOut(expectedHuman: string, decimals: number, slippageBps: numb
 function loadOpsKey(): OpsKey {
   const file = aegisStatePath(OPS_KEY_FILE);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as OpsKey;
+    const parsed = JSON.parse(readTextFile(file)) as OpsKey;
     if (parsed.privateKeyPem && parsed.publicKeyPem && parsed.signingAddress) return parsed;
   } catch {
     // Generate a fresh operations key below.

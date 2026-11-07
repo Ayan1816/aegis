@@ -1,10 +1,12 @@
 import { verifyMessage } from "near-api-js/nep413";
 import {
+  DEMO_OWNER_ID,
   PROOF_RECIPIENT,
   assessProof,
   configuredOwnerId,
   decodeBase64,
   findAccessKey,
+  proofClaimsSessionOwner,
   type AccessKeyRow,
   type WalletProofWire,
 } from "./wallet-proof";
@@ -51,9 +53,16 @@ export async function requireOwnerProof(input: {
   }
   const assessed = assessProof(proof.message, input.action, input.payload, input.now ?? Date.now());
   if (!assessed.ok) throw new WalletAuthError(assessed.code, assessed.message);
+  if (proof.accountId === DEMO_OWNER_ID) {
+    await verifySignedProof(proof, nonce, signature, "FullAccess");
+    return;
+  }
   const owner = (input.ownerId ?? configuredOwnerId()).trim();
-  if (!owner || proof.accountId !== owner) throw new WalletAuthError("owner_required", "Connect the owner wallet.");
-  const rpcUrl = input.rpcUrl || process.env.NEAR_RPC_URL || "https://rpc.testnet.near.org";
+  const sessionOwner = proofClaimsSessionOwner(proof.message);
+  if (!(sessionOwner && proof.accountId) && (!owner || proof.accountId !== owner)) {
+    throw new WalletAuthError("owner_required", "Connect the owner wallet.");
+  }
+  const rpcUrl = input.rpcUrl || rpcForAccount(proof.accountId);
   let keys: AccessKeyRow[];
   try {
     keys = await loadAccessKeys(proof.accountId, rpcUrl, input.fetchImpl ?? defaultFetch);
@@ -63,6 +72,15 @@ export async function requireOwnerProof(input: {
   }
   const listed = findAccessKey(keys, proof.publicKey);
   if (!listed) throw new WalletAuthError("proof_invalid", "Public key is not on the account.");
+  await verifySignedProof(proof, nonce, signature, listed.access_key?.permission);
+}
+
+function rpcForAccount(accountId: string): string {
+  if (accountId.endsWith(".near")) return "https://rpc.mainnet.near.org";
+  return process.env.NEAR_RPC_URL || "https://rpc.testnet.near.org";
+}
+
+async function verifySignedProof(proof: WalletProofWire, nonce: Uint8Array, signature: Uint8Array, permission: unknown): Promise<void> {
   try {
     await verifyMessage({
       signerAccountId: proof.accountId,
@@ -70,7 +88,7 @@ export async function requireOwnerProof(input: {
       payload: { message: proof.message, recipient: PROOF_RECIPIENT, nonce },
       signature,
       provider: {
-        viewAccessKey: async () => ({ permission: listed.access_key?.permission }),
+        viewAccessKey: async () => ({ permission }),
       } as never,
     });
   } catch (error) {
